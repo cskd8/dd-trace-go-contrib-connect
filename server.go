@@ -4,9 +4,8 @@ import (
 	"context"
 
 	"connectrpc.com/connect"
-	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace"
-	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/ext"
-	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
+	"github.com/DataDog/dd-trace-go/v2/ddtrace/ext"
+	"github.com/DataDog/dd-trace-go/v2/ddtrace/tracer"
 )
 
 var _ connect.StreamingHandlerConn = (*wrappedStreamingHandlerConn)(nil)
@@ -97,7 +96,7 @@ func (s serverInterceptor) WrapStreamingHandler(handlerFunc connect.StreamingHan
 		_, im := s.cfg.ignoredMethods[spec.Procedure]
 		_, um := s.cfg.untracedMethods[spec.Procedure]
 		if s.cfg.traceStreamCalls && !im && !um {
-			var span ddtrace.Span
+			var span *tracer.Span
 			span, ctx = startSpan(
 				ctx,
 				conn.RequestHeader(),

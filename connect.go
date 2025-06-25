@@ -8,9 +8,8 @@ import (
 	"strings"
 
 	"connectrpc.com/connect"
-	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace"
-	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/ext"
-	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
+	"github.com/DataDog/dd-trace-go/v2/ddtrace/ext"
+	"github.com/DataDog/dd-trace-go/v2/ddtrace/tracer"
 )
 
 // cache a constant option: saves one allocation per call
@@ -22,12 +21,8 @@ func (cfg *config) startSpanOptions(opts ...tracer.StartSpanOption) []tracer.Sta
 	}
 
 	ret := make([]tracer.StartSpanOption, 0, 1+len(cfg.tags)+len(opts))
-	for _, opt := range opts {
-		ret = append(ret, opt)
-	}
-	for _, opt := range cfg.spanOpts {
-		ret = append(ret, opt)
-	}
+	ret = append(ret, opts...)
+	ret = append(ret, cfg.spanOpts...)
 	for key, tag := range cfg.tags {
 		ret = append(ret, tracer.Tag(key, tag))
 	}
@@ -41,7 +36,7 @@ func startSpan(
 	operation string,
 	serviceFn func() string,
 	opts ...tracer.StartSpanOption,
-) (ddtrace.Span, context.Context) {
+) (*tracer.Span, context.Context) {
 	// common stuff
 	opts = append(opts,
 		tracer.ServiceName(serviceFn()),
@@ -66,7 +61,7 @@ func startSpan(
 }
 
 // finishWithError applies finish option and a tag with gRPC status code, disregarding OK, EOF and Canceled errors.
-func finishWithError(span ddtrace.Span, err error, cfg *config) {
+func finishWithError(span *tracer.Span, err error, cfg *config) {
 	if errors.Is(err, io.EOF) || errors.Is(err, context.Canceled) {
 		err = nil
 	}

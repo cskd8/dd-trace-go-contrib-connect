@@ -2,8 +2,7 @@ package connect
 
 import (
 	"connectrpc.com/connect"
-	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace"
-	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
+	"github.com/DataDog/dd-trace-go/v2/ddtrace/tracer"
 )
 
 const (
@@ -26,7 +25,7 @@ type config struct {
 	withMetadataTags    bool
 	ignoredMetadata     map[string]struct{}
 	withRequestTags     bool
-	spanOpts            []ddtrace.StartSpanOption
+	spanOpts            []tracer.StartSpanOption
 	tags                map[string]interface{}
 }
 
@@ -182,7 +181,7 @@ func WithCustomTag(key string, value interface{}) Option {
 
 // WithSpanOptions defines a set of additional ddtrace.StartSpanOption to be added
 // to spans started by the integration.
-func WithSpanOptions(opts ...ddtrace.StartSpanOption) Option {
+func WithSpanOptions(opts ...tracer.StartSpanOption) Option {
 	return func(cfg *config) {
 		cfg.spanOpts = append(cfg.spanOpts, opts...)
 	}
