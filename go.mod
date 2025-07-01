@@ -5,7 +5,7 @@ go 1.23.0
 toolchain go1.24.4
 
 require (
-	connectrpc.com/connect v1.12.0
+	connectrpc.com/connect v1.18.1
 	github.com/DataDog/dd-trace-go/v2 v2.0.1
 )
 
