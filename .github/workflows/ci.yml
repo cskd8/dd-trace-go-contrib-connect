@@ -29,8 +29,9 @@ jobs:
         path: |
           ~/.cache/go-build
           ~/go/pkg/mod
-        key: ${{ runner.os }}-go-${{ matrix.go-version }}-${{ hashFiles('**/go.sum') }}
+        key: ${{ runner.os }}-go-${{ matrix.go-version }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
         restore-keys: |
+          ${{ runner.os }}-go-${{ matrix.go-version }}-${{ hashFiles('go.mod', 'go.sum') }}-
           ${{ runner.os }}-go-${{ matrix.go-version }}-
           
     - name: Download dependencies
@@ -67,6 +68,17 @@ jobs:
       with:
         go-version: '1.24'
         
+    - name: Cache Go modules
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: ${{ runner.os }}-go-1.24-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-go-1.24-${{ hashFiles('go.mod', 'go.sum') }}-
+          ${{ runner.os }}-go-1.24-
+        
     - name: golangci-lint
       uses: golangci/golangci-lint-action@v4
       with:
@@ -85,6 +97,17 @@ jobs:
       uses: actions/setup-go@v5
       with:
         go-version: '1.24'
+        
+    - name: Cache Go modules
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: ${{ runner.os }}-go-1.24-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-go-1.24-${{ hashFiles('go.mod', 'go.sum') }}-
+          ${{ runner.os }}-go-1.24-
         
     - name: Run Gosec Security Scanner
       uses: securego/gosec@master
@@ -108,6 +131,17 @@ jobs:
       uses: actions/setup-go@v5
       with:
         go-version: '1.24'
+        
+    - name: Cache Go modules
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: ${{ runner.os }}-go-1.24-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-go-1.24-${{ hashFiles('go.mod', 'go.sum') }}-
+          ${{ runner.os }}-go-1.24-
         
     - name: Check go mod tidy
       run: |
