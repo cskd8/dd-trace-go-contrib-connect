@@ -38,7 +38,7 @@ func TestNewServerInterceptor(t *testing.T) {
 			}
 
 			// Verify it implements the interface
-			var _ connect.Interceptor = interceptor
+			var _ connect.Interceptor = (*serverInterceptor)(nil)
 		})
 	}
 }
