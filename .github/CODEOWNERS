@@ -1,0 +1,27 @@
+# Global code owners
+* @cskd8
+
+# Go source files
+*.go @cskd8
+go.mod @cskd8 
+go.sum @cskd8
+
+# Test files
+*_test.go @cskd8
+
+# Documentation
+*.md @cskd8
+LICENSE @cskd8
+
+# GitHub Actions and CI/CD
+.github/ @cskd8
+.github/workflows/ @cskd8
+
+# Configuration files
+.gitignore @cskd8
+
+# Root level configuration
+/go.mod @cskd8
+/go.sum @cskd8
+/README.md @cskd8
+/LICENSE @cskd8 
