@@ -55,7 +55,7 @@ func startSpan(
 
 	// http Spec
 	if sctx, err := tracer.Extract(tracer.HTTPHeadersCarrier(headers)); err == nil {
-		opts = append(opts, tracer.ChildOf(sctx))
+		opts = append(opts, tracer.ChildOf(sctx)) //nolint:staticcheck // SA1019: tracer.ChildOf is deprecated, but kept for compatibility
 	}
 	return tracer.StartSpanFromContext(ctx, operation, opts...)
 }

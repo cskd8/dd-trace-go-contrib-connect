@@ -58,7 +58,9 @@ func TestStartSpanOptions(t *testing.T) {
 
 func TestStartSpan(t *testing.T) {
 	// Start tracer for testing
-	tracer.Start()
+	if err := tracer.Start(); err != nil {
+		t.Fatalf("Failed to start tracer: %v", err)
+	}
 	defer tracer.Stop()
 
 	ctx := context.Background()
@@ -85,7 +87,9 @@ func TestStartSpan(t *testing.T) {
 
 func TestFinishWithError(t *testing.T) {
 	// Start tracer for testing
-	tracer.Start()
+	if err := tracer.Start(); err != nil {
+		t.Fatalf("Failed to start tracer: %v", err)
+	}
 	defer tracer.Stop()
 
 	tests := []struct {
