@@ -62,9 +62,9 @@ func TestServerDefaults(t *testing.T) {
 	}
 }
 
-func TestWithServiceName(t *testing.T) {
+func TestWithService(t *testing.T) {
 	cfg := &config{}
-	option := WithServiceName("test-service")
+	option := WithService("test-service")
 	option(cfg)
 
 	if cfg.serviceName == nil {
@@ -349,7 +349,7 @@ func TestMultipleOptions(t *testing.T) {
 	cfg := &config{}
 
 	// Apply multiple options
-	WithServiceName("multi-test")(cfg)
+	WithService("multi-test")(cfg)
 	WithStreamCalls(false)(cfg)
 	WithCustomTag("env", "test")(cfg)
 	NoDebugStack()(cfg)

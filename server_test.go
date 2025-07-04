@@ -18,12 +18,12 @@ func TestNewServerInterceptor(t *testing.T) {
 		},
 		{
 			name: "with service name",
-			opts: []Option{WithServiceName("test-service")},
+			opts: []Option{WithService("test-service")},
 		},
 		{
 			name: "with multiple options",
 			opts: []Option{
-				WithServiceName("test-service"),
+				WithService("test-service"),
 				WithStreamCalls(false),
 				NoDebugStack(),
 			},

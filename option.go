@@ -57,8 +57,8 @@ func serverDefaults(cfg *config) {
 	defaults(cfg)
 }
 
-// WithServiceName sets the given service name for the intercepted client.
-func WithServiceName(name string) Option {
+// WithService sets the given service name for the intercepted client.
+func WithService(name string) Option {
 	return func(cfg *config) {
 		cfg.serviceName = func() string { return name }
 	}
