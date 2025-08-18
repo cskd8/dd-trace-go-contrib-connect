@@ -11,11 +11,3 @@ This project is a fork and continuation of the original dd-trace-go-contrib-conn
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
-
-## Changelog
-
-### v1.0.0
-- Updated to dd-trace-go v2.0.1
-- Improved performance with StartChild method usage
-- Go 1.23 support
-- Enhanced error handling
