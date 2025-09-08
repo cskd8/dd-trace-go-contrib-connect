@@ -6,7 +6,7 @@ toolchain go1.24.4
 
 require (
 	connectrpc.com/connect v1.18.1
-	github.com/DataDog/dd-trace-go/v2 v2.2.2
+	github.com/DataDog/dd-trace-go/v2 v2.2.3
 )
 
 require (
@@ -14,7 +14,7 @@ require (
 	github.com/DataDog/datadog-agent/comp/core/tagger/origindetection v0.67.0 // indirect
 	github.com/DataDog/datadog-agent/pkg/obfuscate v0.67.0 // indirect
 	github.com/DataDog/datadog-agent/pkg/proto v0.67.0 // indirect
-	github.com/DataDog/datadog-agent/pkg/remoteconfig/state v0.67.0 // indirect
+	github.com/DataDog/datadog-agent/pkg/remoteconfig/state v0.69.0 // indirect
 	github.com/DataDog/datadog-agent/pkg/trace v0.67.0 // indirect
 	github.com/DataDog/datadog-agent/pkg/util/log v0.67.0 // indirect
 	github.com/DataDog/datadog-agent/pkg/util/scrubber v0.67.0 // indirect
