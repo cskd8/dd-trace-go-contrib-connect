@@ -1,11 +1,11 @@
 module github.com/cskd8/dd-trace-go-contrib-connect
 
-go 1.23.0
+go 1.24.0
 
 toolchain go1.24.4
 
 require (
-	connectrpc.com/connect v1.18.1
+	connectrpc.com/connect v1.19.0
 	github.com/DataDog/dd-trace-go/v2 v2.2.3
 )
 
@@ -81,7 +81,7 @@ require (
 	golang.org/x/xerrors v0.0.0-20231012003039-104605ab7028 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250425173222-7b384671a197 // indirect
 	google.golang.org/grpc v1.72.0 // indirect
-	google.golang.org/protobuf v1.36.6 // indirect
+	google.golang.org/protobuf v1.36.9 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
