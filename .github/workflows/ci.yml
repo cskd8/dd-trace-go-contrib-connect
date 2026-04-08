@@ -12,17 +12,17 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        go-version: ['1.24', '1.25', '1.26']
+        go-version: ['1.25', '1.26']
     steps:
     - name: Checkout code
       uses: actions/checkout@v6
-      
+
     - name: Set up Go
       uses: actions/setup-go@v6
       with:
         go-version: ${{ matrix.go-version }}
         cache: true
-          
+
     - name: Download dependencies
       run: go mod download
       
@@ -49,17 +49,17 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        go-version: ['1.24', '1.25', '1.26']
+        go-version: ['1.25', '1.26']
     steps:
     - name: Checkout code
       uses: actions/checkout@v6
-      
+
     - name: Set up Go
       uses: actions/setup-go@v6
       with:
         go-version: ${{ matrix.go-version }}
         cache: true
-        
+
     - name: golangci-lint
       uses: golangci/golangci-lint-action@v9
       with:
@@ -71,17 +71,17 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        go-version: ['1.24', '1.25', '1.26']
+        go-version: ['1.25', '1.26']
     steps:
     - name: Checkout code
       uses: actions/checkout@v6
-      
+
     - name: Set up Go
       uses: actions/setup-go@v6
       with:
         go-version: ${{ matrix.go-version }}
         cache: true
-        
+
     - name: Run Gosec Security Scanner
       uses: securego/gosec@master
       with:
@@ -97,17 +97,17 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        go-version: ['1.24', '1.25', '1.26']
+        go-version: ['1.25', '1.26']
     steps:
     - name: Checkout code
       uses: actions/checkout@v6
-      
+
     - name: Set up Go
       uses: actions/setup-go@v6
       with:
         go-version: ${{ matrix.go-version }}
         cache: true
-        
+
     - name: Check go mod tidy
       run: |
         go mod tidy
