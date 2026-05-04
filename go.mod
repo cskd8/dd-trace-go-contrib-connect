@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	connectrpc.com/connect v1.19.1
-	github.com/DataDog/dd-trace-go/v2 v2.7.1
+	github.com/DataDog/dd-trace-go/v2 v2.7.4
 )
 
 require (
