@@ -3,7 +3,7 @@ module github.com/cskd8/dd-trace-go-contrib-connect
 go 1.25.0
 
 require (
-	connectrpc.com/connect v1.19.1
+	connectrpc.com/connect v1.19.2
 	github.com/DataDog/dd-trace-go/v2 v2.7.1
 )
 
