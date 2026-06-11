@@ -69,7 +69,7 @@ func TestStartSpan(t *testing.T) {
 	operation := "test.operation"
 	serviceFn := func() string { return "test-service" }
 
-	span, newCtx := startSpan(ctx, headers, method, operation, serviceFn)
+	span, newCtx := startSpan(ctx, headers, method, operation, serviceFn, true)
 
 	if span == nil {
 		t.Error("expected span to be created")

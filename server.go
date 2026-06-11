@@ -27,9 +27,12 @@ func (c *wrappedStreamingHandlerConn) Receive(m any) (err error) {
 			methodName,
 			"connect.message",
 			c.cfg.serviceName,
+			true,
 			c.cfg.startSpanOptions(tracer.Measured())...,
 		)
 		defer func() {
+			withMetadataTags(c.cfg, c.RequestHeader(), span)
+			withRequestTags(c.cfg, m, span)
 			finishWithError(span, err, c.cfg)
 		}()
 	}
@@ -46,8 +49,9 @@ func (c *wrappedStreamingHandlerConn) Send(m any) (err error) {
 			c.ctx,
 			c.RequestHeader(),
 			methodName,
-			"grpc.message",
+			"connect.message",
 			c.cfg.serviceName,
+			true,
 			c.cfg.startSpanOptions(tracer.Measured())...,
 		)
 		defer func() { finishWithError(span, err, c.cfg) }()
@@ -76,10 +80,14 @@ func (s serverInterceptor) WrapUnary(unaryFunc connect.UnaryFunc) connect.UnaryF
 			spec.Procedure,
 			s.cfg.spanName,
 			s.cfg.serviceName,
+			true,
 			s.cfg.startSpanOptions(tracer.Measured(),
 				tracer.Tag(ext.SpanKind, ext.SpanKindServer))...,
 		)
 		span.SetTag(tagMethodKind, methodKindUnary)
+		withPeerTags(req.Peer(), span)
+		withMetadataTags(s.cfg, req.Header(), span)
+		withRequestTags(s.cfg, req.Any(), span)
 		resp, err := unaryFunc(ctx, req)
 		finishWithError(span, err, s.cfg)
 		return resp, err
@@ -103,9 +111,12 @@ func (s serverInterceptor) WrapStreamingHandler(handlerFunc connect.StreamingHan
 				spec.Procedure,
 				s.cfg.spanName,
 				s.cfg.serviceName,
+				true,
 				s.cfg.startSpanOptions(tracer.Measured(),
 					tracer.Tag(ext.SpanKind, ext.SpanKindServer))...,
 			)
+			withPeerTags(conn.Peer(), span)
+			withMetadataTags(s.cfg, conn.RequestHeader(), span)
 			switch conn.Spec().StreamType {
 			case connect.StreamTypeBidi:
 				span.SetTag(tagMethodKind, methodKindBidiStream)
