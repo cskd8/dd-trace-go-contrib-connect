@@ -7,6 +7,7 @@ import (
 
 const (
 	defaultServerServiceName = "connect.server"
+	defaultClientServiceName = "connect.client"
 )
 
 // Option specifies a configuration option for the grpc package. Not all options apply
@@ -46,6 +47,9 @@ func defaults(cfg *config) {
 		"x-datadog-trace-id":          {},
 		"x-datadog-parent-id":         {},
 		"x-datadog-sampling-priority": {},
+		"x-datadog-tags":              {},
+		"traceparent":                 {},
+		"tracestate":                  {},
 	}
 }
 
@@ -54,6 +58,12 @@ func serverDefaults(cfg *config) {
 	// before the call `tracer.Start()`
 	cfg.serviceName = func() string { return defaultServerServiceName }
 	cfg.spanName = "connect.server.request"
+	defaults(cfg)
+}
+
+func clientDefaults(cfg *config) {
+	cfg.serviceName = func() string { return defaultClientServiceName }
+	cfg.spanName = "connect.client.request"
 	defaults(cfg)
 }
 
@@ -145,7 +155,8 @@ func WithUntracedMethods(ms ...string) Option {
 	}
 }
 
-// WithMetadataTags specifies whether gRPC metadata should be added to spans as tags.
+// WithMetadataTags specifies whether request headers (metadata) should be added
+// to spans as connect.metadata.* tags.
 func WithMetadataTags() Option {
 	return func(cfg *config) {
 		cfg.withMetadataTags = true
@@ -162,7 +173,8 @@ func WithIgnoredMetadata(ms ...string) Option {
 	}
 }
 
-// WithRequestTags specifies whether gRPC requests should be added to spans as tags.
+// WithRequestTags specifies whether request messages should be added to spans
+// as the connect.request tag, serialized as JSON.
 func WithRequestTags() Option {
 	return func(cfg *config) {
 		cfg.withRequestTags = true
