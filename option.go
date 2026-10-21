@@ -1,7 +1,7 @@
 package connect
 
 import (
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/tracer"
 )
 

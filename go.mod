@@ -1,9 +1,9 @@
-module github.com/cskd8/dd-trace-go-contrib-connect
+module github.com/cskd8/dd-trace-go-contrib-connect/v2
 
 go 1.26.0
 
 require (
-	connectrpc.com/connect v1.21.1
+	connectrpc.com/connect/v2 v2.0.1
 	github.com/DataDog/dd-trace-go/v2 v2.11.2
 	google.golang.org/protobuf v1.36.12
 )

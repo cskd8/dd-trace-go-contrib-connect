@@ -2,27 +2,50 @@
 
 Datadog APM tracing interceptors for [connect-go](https://connectrpc.com/).
 
+| Module | connect-go | Branch |
+|--------|------------|--------|
+| `github.com/cskd8/dd-trace-go-contrib-connect/v2` | `connectrpc.com/connect/v2` | `main` |
+| `github.com/cskd8/dd-trace-go-contrib-connect` | `connectrpc.com/connect` (v1) | [`v1`](https://github.com/cskd8/dd-trace-go-contrib-connect/tree/v1) |
+
 ## Usage
 
 ```go
 import (
-	"connectrpc.com/connect"
-	connecttrace "github.com/cskd8/dd-trace-go-contrib-connect"
+	"connectrpc.com/connect/v2"
+	"connectrpc.com/connect/v2/connecthttp"
+	connecttrace "github.com/cskd8/dd-trace-go-contrib-connect/v2"
 )
 
 // Server side
-path, handler := examplev1connect.NewExampleServiceHandler(svc, connect.WithInterceptors(
+server := connect.NewServer(
 	connecttrace.NewServerInterceptor(connecttrace.WithService("my-service")),
-))
+)
+examplev1connect.RegisterExampleServiceHandler(server, svc)
+connecthttp.Mount(mux, server)
 
 // Client side
-client := examplev1connect.NewExampleServiceClient(httpClient, baseURL, connect.WithInterceptors(
+client := examplev1connect.NewExampleServiceClient(connect.NewClient(
+	connecthttp.NewTransport(httpClient, baseURL),
 	connecttrace.NewClientInterceptor(connecttrace.WithService("my-service")),
 ))
 ```
 
+The server interceptor always traces unary calls; streaming calls and their
+messages are traced according to `WithStreamCalls` and `WithStreamMessages`.
 The client interceptor traces unary calls and injects the trace context into the
 request headers. For streaming client calls it only propagates the trace context.
+
+### Migrating from v1
+
+The options are unchanged. `NewServerInterceptor` and `NewClientInterceptor`
+now return `connect.ServerInterceptor` and `connect.ClientInterceptor`, which
+are passed to `connect.NewServer` and `connect.NewClient` instead of
+`connect.WithInterceptors`.
+
+connect-go v2 runs server interceptors before the request is unmarshaled, so
+the `connect.request` tag of `WithRequestTags()` is set when the handler
+receives the request rather than when the span starts. The finished spans carry
+the same tags as in v1.
 
 ## Span tags
 

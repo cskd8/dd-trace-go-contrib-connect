@@ -3,147 +3,129 @@ package connect
 import (
 	"context"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/ext"
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/tracer"
 )
 
-var _ connect.StreamingHandlerConn = (*wrappedStreamingHandlerConn)(nil)
+var _ connect.ServerStream = (*requestTaggingServerStream)(nil)
 
-type wrappedStreamingHandlerConn struct {
-	connect.StreamingHandlerConn
-	cfg *config
-	ctx context.Context
+// requestTaggingServerStream tags the span of a unary call with the request
+// message. Server interceptors run before the request is unmarshaled, so the
+// message is only available once the handler receives it.
+type requestTaggingServerStream struct {
+	connect.ServerStream
+	cfg    *config
+	span   *tracer.Span
+	tagged bool
 }
 
-func (c *wrappedStreamingHandlerConn) Receive(m any) (err error) {
-	methodName := c.Spec().Procedure
-	_, im := c.cfg.ignoredMethods[methodName]
-	_, um := c.cfg.untracedMethods[methodName]
-	if c.cfg.traceStreamMessages && !im && !um {
-		span, _ := startSpan(
-			c.ctx,
-			c.RequestHeader(),
-			methodName,
-			"connect.message",
-			c.cfg.serviceName,
-			true,
-			c.cfg.startSpanOptions(tracer.Measured())...,
-		)
-		defer func() {
-			withMetadataTags(c.cfg, c.RequestHeader(), span)
-			withRequestTags(c.cfg, m, span)
-			finishWithError(span, err, c.cfg)
-		}()
+func (s *requestTaggingServerStream) Receive(m any) error {
+	err := s.ServerStream.Receive(m)
+	if err == nil && !s.tagged {
+		s.tagged = true
+		withRequestTags(s.cfg, m, s.span)
 	}
-	err = c.StreamingHandlerConn.Receive(m)
 	return err
 }
 
-func (c *wrappedStreamingHandlerConn) Send(m any) (err error) {
-	methodName := c.Spec().Procedure
-	_, im := c.cfg.ignoredMethods[methodName]
-	_, um := c.cfg.untracedMethods[methodName]
-	if c.cfg.traceStreamMessages && !im && !um {
-		span, _ := startSpan(
-			c.ctx,
-			c.RequestHeader(),
-			methodName,
-			"connect.message",
-			c.cfg.serviceName,
-			true,
-			c.cfg.startSpanOptions(tracer.Measured())...,
-		)
-		defer func() { finishWithError(span, err, c.cfg) }()
-	}
-	err = c.StreamingHandlerConn.Send(m)
-	return err
+var _ connect.ServerStream = (*messageTracingServerStream)(nil)
+
+// messageTracingServerStream traces each message sent and received on a
+// streaming call.
+type messageTracingServerStream struct {
+	connect.ServerStream
+	cfg       *config
+	ctx       context.Context
+	procedure string
+	header    *connect.Header
 }
 
-var _ connect.Interceptor = (*serverInterceptor)(nil)
-
-type serverInterceptor struct {
-	cfg *config
-}
-
-func (s serverInterceptor) WrapUnary(unaryFunc connect.UnaryFunc) connect.UnaryFunc {
-	return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
-		spec := req.Spec()
-		_, im := s.cfg.ignoredMethods[spec.Procedure]
-		_, um := s.cfg.untracedMethods[spec.Procedure]
-		if im || um {
-			return unaryFunc(ctx, req)
-		}
-		span, ctx := startSpan(
-			ctx,
-			req.Header(),
-			spec.Procedure,
-			s.cfg.spanName,
-			s.cfg.serviceName,
-			true,
-			s.cfg.startSpanOptions(tracer.Measured(),
-				tracer.Tag(ext.SpanKind, ext.SpanKindServer))...,
-		)
-		span.SetTag(tagMethodKind, methodKindUnary)
-		withPeerTags(req.Peer(), span)
-		withMetadataTags(s.cfg, req.Header(), span)
-		withRequestTags(s.cfg, req.Any(), span)
-		resp, err := unaryFunc(ctx, req)
+func (s *messageTracingServerStream) Receive(m any) (err error) {
+	span, _ := startSpan(
+		s.ctx,
+		s.header,
+		s.procedure,
+		"connect.message",
+		s.cfg.serviceName,
+		true,
+		s.cfg.startSpanOptions(tracer.Measured())...,
+	)
+	defer func() {
+		withMetadataTags(s.cfg, s.header, span)
+		withRequestTags(s.cfg, m, span)
 		finishWithError(span, err, s.cfg)
-		return resp, err
-	}
+	}()
+	err = s.ServerStream.Receive(m)
+	return err
 }
 
-func (s serverInterceptor) WrapStreamingClient(clientFunc connect.StreamingClientFunc) connect.StreamingClientFunc {
-	return clientFunc
+func (s *messageTracingServerStream) Send(m any) (err error) {
+	span, _ := startSpan(
+		s.ctx,
+		s.header,
+		s.procedure,
+		"connect.message",
+		s.cfg.serviceName,
+		true,
+		s.cfg.startSpanOptions(tracer.Measured())...,
+	)
+	defer func() { finishWithError(span, err, s.cfg) }()
+	err = s.ServerStream.Send(m)
+	return err
 }
 
-func (s serverInterceptor) WrapStreamingHandler(handlerFunc connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
-	return func(ctx context.Context, conn connect.StreamingHandlerConn) (err error) {
-		spec := conn.Spec()
-		_, im := s.cfg.ignoredMethods[spec.Procedure]
-		_, um := s.cfg.untracedMethods[spec.Procedure]
-		if s.cfg.traceStreamCalls && !im && !um {
-			var span *tracer.Span
-			span, ctx = startSpan(
-				ctx,
-				conn.RequestHeader(),
-				spec.Procedure,
-				s.cfg.spanName,
-				s.cfg.serviceName,
-				true,
-				s.cfg.startSpanOptions(tracer.Measured(),
-					tracer.Tag(ext.SpanKind, ext.SpanKindServer))...,
-			)
-			withPeerTags(conn.Peer(), span)
-			withMetadataTags(s.cfg, conn.RequestHeader(), span)
-			switch conn.Spec().StreamType {
-			case connect.StreamTypeBidi:
-				span.SetTag(tagMethodKind, methodKindBidiStream)
-			case connect.StreamTypeServer:
-				span.SetTag(tagMethodKind, methodKindServerStream)
-			case connect.StreamTypeClient:
-				span.SetTag(tagMethodKind, methodKindClientStream)
-			}
-			defer func() { finishWithError(span, err, s.cfg) }()
-		}
-
-		// call the original handler with a new stream, which traces each send
-		// and recv if message tracing is enabled
-		err = handlerFunc(ctx, &wrappedStreamingHandlerConn{
-			StreamingHandlerConn: conn,
-			cfg:                  s.cfg,
-			ctx:                  ctx,
-		})
-		return err
-	}
-}
-
-func NewServerInterceptor(opts ...Option) connect.Interceptor {
+// NewServerInterceptor returns a connect.ServerInterceptor which traces the
+// RPCs served by a connect.Server. Unary calls are always traced; streaming
+// calls and their messages are traced according to WithStreamCalls and
+// WithStreamMessages.
+func NewServerInterceptor(opts ...Option) connect.ServerInterceptor {
 	cfg := new(config)
 	serverDefaults(cfg)
 	for _, opt := range opts {
 		opt(cfg)
 	}
-	return &serverInterceptor{cfg: cfg}
+	return func(next connect.ServerFunc) connect.ServerFunc {
+		return func(ctx context.Context, spec connect.Spec, stream connect.ServerStream) (err error) {
+			if cfg.isUntraced(spec.Procedure) {
+				return next(ctx, spec, stream)
+			}
+			info, _ := connect.CallInfoForServerContext(ctx)
+			header := requestHeader(info)
+			unary := spec.StreamType == connect.StreamTypeUnary
+			if unary || cfg.traceStreamCalls {
+				var span *tracer.Span
+				span, ctx = startSpan(
+					ctx,
+					header,
+					spec.Procedure,
+					cfg.spanName,
+					cfg.serviceName,
+					true,
+					cfg.startSpanOptions(tracer.Measured(),
+						tracer.Tag(ext.SpanKind, ext.SpanKindServer))...,
+				)
+				span.SetTag(tagMethodKind, methodKind(spec.StreamType))
+				withPeerTags(info, span)
+				withMetadataTags(cfg, header, span)
+				defer func() { finishWithError(span, err, cfg) }()
+				if unary && cfg.withRequestTags {
+					stream = &requestTaggingServerStream{ServerStream: stream, cfg: cfg, span: span}
+				}
+			}
+			// trace each send and receive of a streaming call if message
+			// tracing is enabled
+			if !unary && cfg.traceStreamMessages {
+				stream = &messageTracingServerStream{
+					ServerStream: stream,
+					cfg:          cfg,
+					ctx:          ctx,
+					procedure:    spec.Procedure,
+					header:       header,
+				}
+			}
+			err = next(ctx, spec, stream)
+			return err
+		}
+	}
 }

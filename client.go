@@ -2,72 +2,125 @@ package connect
 
 import (
 	"context"
+	"sync"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/ext"
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/tracer"
 )
 
-var _ connect.Interceptor = (*clientInterceptor)(nil)
+var _ connect.ClientStream = (*unaryClientStream)(nil)
 
-type clientInterceptor struct {
-	cfg *config
+// unaryClientStream finishes the span of a unary call once the response is
+// received, or when the stream is closed before that. connect.Client.CallUnary
+// sends the request, receives the response and always closes the stream.
+type unaryClientStream struct {
+	connect.ClientStream
+	cfg    *config
+	span   *tracer.Span
+	tagged bool
+
+	mu   sync.Mutex
+	err  error
+	once sync.Once
 }
 
-func (c clientInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
-	return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
-		spec := req.Spec()
-		_, im := c.cfg.ignoredMethods[spec.Procedure]
-		_, um := c.cfg.untracedMethods[spec.Procedure]
-		if im || um {
-			return next(ctx, req)
-		}
-		span, ctx := startSpan(
-			ctx,
-			req.Header(),
-			spec.Procedure,
-			c.cfg.spanName,
-			c.cfg.serviceName,
-			false,
-			c.cfg.startSpanOptions(tracer.Measured(),
-				tracer.Tag(ext.SpanKind, ext.SpanKindClient))...,
-		)
-		span.SetTag(tagMethodKind, methodKindUnary)
-		withPeerTags(req.Peer(), span)
-		withMetadataTags(c.cfg, req.Header(), span)
-		withRequestTags(c.cfg, req.Any(), span)
-		// propagate the span context to the server through the request headers
-		_ = tracer.Inject(span.Context(), tracer.HTTPHeadersCarrier(req.Header()))
-		resp, err := next(ctx, req)
-		finishWithError(span, err, c.cfg)
-		return resp, err
+func (s *unaryClientStream) Send(msg any) error {
+	if !s.tagged {
+		s.tagged = true
+		withRequestTags(s.cfg, msg, s.span)
+	}
+	err := s.ClientStream.Send(msg)
+	s.recordError(err)
+	return err
+}
+
+func (s *unaryClientStream) CloseSend() error {
+	err := s.ClientStream.CloseSend()
+	s.recordError(err)
+	return err
+}
+
+func (s *unaryClientStream) Receive(msg any) error {
+	err := s.ClientStream.Receive(msg)
+	s.finish(err)
+	return err
+}
+
+func (s *unaryClientStream) Close() error {
+	closeErr := s.ClientStream.Close()
+	// the span reports the error of the call, which is the first send error
+	// when the response was never received
+	s.mu.Lock()
+	err := s.err
+	s.mu.Unlock()
+	if err == nil {
+		err = closeErr
+	}
+	s.finish(err)
+	return closeErr
+}
+
+func (s *unaryClientStream) recordError(err error) {
+	if err == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err == nil {
+		s.err = err
 	}
 }
 
-// WrapStreamingClient propagates the active span context to the server through
-// the request headers. Streaming client calls are not traced as spans.
-func (c clientInterceptor) WrapStreamingClient(next connect.StreamingClientFunc) connect.StreamingClientFunc {
-	return func(ctx context.Context, spec connect.Spec) connect.StreamingClientConn {
-		conn := next(ctx, spec)
-		if span, ok := tracer.SpanFromContext(ctx); ok {
-			_ = tracer.Inject(span.Context(), tracer.HTTPHeadersCarrier(conn.RequestHeader()))
-		}
-		return conn
-	}
+func (s *unaryClientStream) finish(err error) {
+	s.once.Do(func() { finishWithError(s.span, err, s.cfg) })
 }
 
-func (c clientInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
-	return next
-}
-
-// NewClientInterceptor returns a connect.Interceptor which traces unary client
-// calls and injects the trace context into the request headers so the server
-// can continue the trace.
-func NewClientInterceptor(opts ...Option) connect.Interceptor {
+// NewClientInterceptor returns a connect.ClientInterceptor which traces unary
+// client calls and injects the trace context into the request headers so the
+// server can continue the trace. Streaming client calls are not traced as
+// spans; the active span context of ctx is only propagated to the server.
+func NewClientInterceptor(opts ...Option) connect.ClientInterceptor {
 	cfg := new(config)
 	clientDefaults(cfg)
 	for _, opt := range opts {
 		opt(cfg)
 	}
-	return &clientInterceptor{cfg: cfg}
+	return func(next connect.ClientFunc) connect.ClientFunc {
+		return func(ctx context.Context, spec connect.Spec) (connect.ClientStream, error) {
+			info, _ := connect.CallInfoForClientContext(ctx)
+			header := requestHeader(info)
+			if spec.StreamType != connect.StreamTypeUnary {
+				if span, ok := tracer.SpanFromContext(ctx); ok {
+					_ = tracer.Inject(span.Context(), headerCarrier{header: header})
+				}
+				return next(ctx, spec)
+			}
+			if cfg.isUntraced(spec.Procedure) {
+				return next(ctx, spec)
+			}
+			span, ctx := startSpan(
+				ctx,
+				header,
+				spec.Procedure,
+				cfg.spanName,
+				cfg.serviceName,
+				false,
+				cfg.startSpanOptions(tracer.Measured(),
+					tracer.Tag(ext.SpanKind, ext.SpanKindClient))...,
+			)
+			span.SetTag(tagMethodKind, methodKindUnary)
+			withMetadataTags(cfg, header, span)
+			// propagate the span context to the server through the request headers
+			_ = tracer.Inject(span.Context(), headerCarrier{header: header})
+			stream, err := next(ctx, spec)
+			// the transport sets the peer address and protocol when it opens the stream
+			withPeerTags(info, span)
+			if err != nil {
+				finishWithError(span, err, cfg)
+				return nil, err
+			}
+			return &unaryClientStream{ClientStream: stream, cfg: cfg, span: span}, nil
+		}
+	}
 }

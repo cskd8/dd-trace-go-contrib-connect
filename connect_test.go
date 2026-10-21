@@ -3,10 +3,9 @@ package connect
 import (
 	"context"
 	"errors"
-	"net/http"
 	"testing"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/tracer"
 )
 
@@ -64,7 +63,7 @@ func TestStartSpan(t *testing.T) {
 	defer tracer.Stop()
 
 	ctx := context.Background()
-	headers := http.Header{}
+	headers := &connect.Header{}
 	method := "/test.Service/TestMethod"
 	operation := "test.operation"
 	serviceFn := func() string { return "test-service" }
@@ -109,12 +108,12 @@ func TestFinishWithError(t *testing.T) {
 		},
 		{
 			name: "connect error",
-			err:  connect.NewError(connect.CodeInternal, errors.New("internal error")),
+			err:  connect.NewError(connect.CodeInternal, "internal error"),
 			cfg:  &config{},
 		},
 		{
 			name: "non-error code",
-			err:  connect.NewError(connect.CodeUnavailable, errors.New("unavailable")),
+			err:  connect.NewError(connect.CodeUnavailable, "unavailable"),
 			cfg: &config{
 				nonErrorCodes: map[connect.Code]bool{
 					connect.CodeUnavailable: true,
@@ -143,5 +142,61 @@ func TestConfigDefaults(t *testing.T) {
 	// With empty config and no input options, should return empty slice
 	if len(opts) != 0 {
 		t.Errorf("expected empty options slice, got %d options", len(opts))
+	}
+}
+
+func TestHeaderCarrier(t *testing.T) {
+	header := &connect.Header{}
+	carrier := headerCarrier{header: header}
+	carrier.Set("x-datadog-trace-id", "123")
+	header.Add("X-Multi", "a")
+	header.Add("X-Multi", "b")
+
+	if got := header.Get("X-Datadog-Trace-Id"); got != "123" {
+		t.Errorf("expected Set to write the header, got %q", got)
+	}
+
+	got := map[string][]string{}
+	if err := carrier.ForeachKey(func(key, val string) error {
+		got[key] = append(got[key], val)
+		return nil
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got["X-Datadog-Trace-Id"]) != 1 || len(got["X-Multi"]) != 2 {
+		t.Errorf("expected every value to be visited, got %v", got)
+	}
+
+	errStop := errors.New("stop")
+	if err := carrier.ForeachKey(func(string, string) error { return errStop }); !errors.Is(err, errStop) {
+		t.Errorf("expected the handler error to be returned, got %v", err)
+	}
+}
+
+func TestHeaderCarrierNil(t *testing.T) {
+	carrier := headerCarrier{}
+	carrier.Set("x-datadog-trace-id", "123")
+	if err := carrier.ForeachKey(func(string, string) error {
+		t.Error("expected no keys")
+		return nil
+	}); err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestMethodKind(t *testing.T) {
+	tests := []struct {
+		streamType connect.StreamType
+		expected   string
+	}{
+		{connect.StreamTypeUnary, methodKindUnary},
+		{connect.StreamTypeClient, methodKindClientStream},
+		{connect.StreamTypeServer, methodKindServerStream},
+		{connect.StreamTypeBidi, methodKindBidiStream},
+	}
+	for _, tt := range tests {
+		if got := methodKind(tt.streamType); got != tt.expected {
+			t.Errorf("methodKind(%v) = %q, expected %q", tt.streamType, got, tt.expected)
+		}
 	}
 }

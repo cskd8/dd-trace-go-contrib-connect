@@ -4,7 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
+	"github.com/DataDog/dd-trace-go/v2/ddtrace/mocktracer"
 )
 
 func TestNewServerInterceptor(t *testing.T) {
@@ -36,131 +37,149 @@ func TestNewServerInterceptor(t *testing.T) {
 			if interceptor == nil {
 				t.Error("expected interceptor to be created")
 			}
-
-			// Verify it implements the interface
-			var _ connect.Interceptor = (*serverInterceptor)(nil)
 		})
 	}
 }
 
-func TestServerInterceptor_WrapUnary(t *testing.T) {
+func TestServerInterceptorUntracedMethods(t *testing.T) {
 	tests := []struct {
-		name            string
-		ignoredMethods  []string
-		untracedMethods []string
+		name string
+		opt  Option
 	}{
 		{
-			name:           "with ignored methods",
-			ignoredMethods: []string{"/test.Service/IgnoredMethod"},
+			name: "with ignored methods",
+			opt:  WithIgnoredMethods(unarySpec.Procedure, serverStreamSpec.Procedure),
 		},
 		{
-			name:            "with untraced methods",
-			untracedMethods: []string{"/test.Service/UntracedMethod"},
-		},
-		{
-			name: "default config",
+			name: "with untraced methods",
+			opt:  WithUntracedMethods(unarySpec.Procedure, serverStreamSpec.Procedure),
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var options []Option
-			if len(tt.ignoredMethods) > 0 {
-				options = append(options, WithIgnoredMethods(tt.ignoredMethods...))
-			}
-			if len(tt.untracedMethods) > 0 {
-				options = append(options, WithUntracedMethods(tt.untracedMethods...))
-			}
+			mt := mocktracer.Start()
+			defer mt.Stop()
 
-			interceptor := NewServerInterceptor(options...).(*serverInterceptor)
+			svc := &testService{}
+			client := newInProcessClient(svc.newServer(NewServerInterceptor(tt.opt)))
 
-			// Test that the wrapped function is created without error
-			unaryFunc := func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
-				return nil, nil
-			}
+			_, err := callUnary(context.Background(), client, "hello")
+			requireNoError(t, err)
+			_, err = callServerStream(context.Background(), client, "hello")
+			requireNoError(t, err)
 
-			wrappedFunc := interceptor.WrapUnary(unaryFunc)
-			if wrappedFunc == nil {
-				t.Error("expected wrapped function to be created")
+			if spans := mt.FinishedSpans(); len(spans) != 0 {
+				t.Errorf("expected no spans, got %d", len(spans))
 			}
 		})
 	}
 }
 
-func TestServerInterceptor_WrapStreamingHandler(t *testing.T) {
+func TestServerInterceptorStream(t *testing.T) {
 	tests := []struct {
-		name           string
-		traceStream    bool
-		ignoredMethods []string
+		name             string
+		opts             []Option
+		wantCallSpans    int
+		wantMessageSpans int
 	}{
 		{
-			name:        "stream tracing enabled",
-			traceStream: true,
+			name:             "default options",
+			wantCallSpans:    1,
+			wantMessageSpans: 3, // 1 receive + 2 sends
 		},
 		{
-			name:        "stream tracing disabled",
-			traceStream: false,
+			name:             "stream calls disabled",
+			opts:             []Option{WithStreamCalls(false)},
+			wantCallSpans:    0,
+			wantMessageSpans: 3,
 		},
 		{
-			name:           "with ignored methods",
-			traceStream:    true,
-			ignoredMethods: []string{"/test.Service/IgnoredStream"},
+			name:             "stream messages disabled",
+			opts:             []Option{WithStreamMessages(false)},
+			wantCallSpans:    1,
+			wantMessageSpans: 0,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var options []Option
-			options = append(options, WithStreamCalls(tt.traceStream))
-			if len(tt.ignoredMethods) > 0 {
-				options = append(options, WithIgnoredMethods(tt.ignoredMethods...))
+			mt := mocktracer.Start()
+			defer mt.Stop()
+
+			svc := &testService{}
+			client := newInProcessClient(svc.newServer(NewServerInterceptor(tt.opts...)))
+
+			n, err := callServerStream(context.Background(), client, "hello")
+			requireNoError(t, err)
+			if n != 2 {
+				t.Fatalf("expected 2 messages, got %d", n)
 			}
 
-			interceptor := NewServerInterceptor(options...).(*serverInterceptor)
-
-			handlerFunc := func(ctx context.Context, conn connect.StreamingHandlerConn) error {
-				return nil
+			spans := spansByOperation(mt)
+			callSpans := spans["connect.server.request"]
+			messageSpans := spans["connect.message"]
+			if len(callSpans) != tt.wantCallSpans {
+				t.Fatalf("expected %d call spans, got %d", tt.wantCallSpans, len(callSpans))
 			}
-
-			wrappedHandler := interceptor.WrapStreamingHandler(handlerFunc)
-			if wrappedHandler == nil {
-				t.Error("expected wrapped handler to be created")
+			if len(messageSpans) != tt.wantMessageSpans {
+				t.Fatalf("expected %d message spans, got %d", tt.wantMessageSpans, len(messageSpans))
+			}
+			if len(callSpans) == 1 {
+				if got := callSpans[0].Tag(tagMethodKind); got != methodKindServerStream {
+					t.Errorf("expected connect.method.kind server_streaming, got %v", got)
+				}
+				if got := callSpans[0].Tag(tagCode); got != codeOK {
+					t.Errorf("expected connect.code ok, got %v", got)
+				}
+				for _, span := range messageSpans {
+					if span.ParentID() != callSpans[0].SpanID() {
+						t.Errorf("expected message spans to be children of the call span")
+					}
+				}
 			}
 		})
 	}
 }
 
-func TestServerInterceptor_WrapStreamingClient(t *testing.T) {
-	interceptor := NewServerInterceptor().(*serverInterceptor)
+func TestServerInterceptorStreamRequestTags(t *testing.T) {
+	mt := mocktracer.Start()
+	defer mt.Stop()
 
-	// Mock client function
-	clientFunc := func(ctx context.Context, spec connect.Spec) connect.StreamingClientConn {
-		return nil
+	svc := &testService{}
+	client := newInProcessClient(svc.newServer(NewServerInterceptor(WithRequestTags())))
+
+	_, err := callServerStream(context.Background(), client, "hello")
+	requireNoError(t, err)
+
+	var tagged int
+	for _, span := range spansByOperation(mt)["connect.message"] {
+		if span.Tag(tagRequest) != nil {
+			tagged++
+		}
 	}
-
-	// Should return the same function (no wrapping for client)
-	wrappedClient := interceptor.WrapStreamingClient(clientFunc)
-
-	if wrappedClient == nil {
-		t.Error("expected wrapped client function to be returned")
+	// only the received request message is tagged
+	if tagged != 1 {
+		t.Errorf("expected 1 message span with the request tag, got %d", tagged)
 	}
 }
 
-func TestWrappedStreamingHandlerConn_Creation(t *testing.T) {
-	cfg := &config{}
-	serverDefaults(cfg)
+func TestServerInterceptorCanceledIsNotError(t *testing.T) {
+	mt := mocktracer.Start()
+	defer mt.Stop()
 
-	// Test that wrappedStreamingHandlerConn can be created
-	wrapped := &wrappedStreamingHandlerConn{
-		cfg: cfg,
-		ctx: context.Background(),
+	svc := &testService{err: connect.NewError(connect.CodeCanceled, "canceled")}
+	client := newInProcessClient(svc.newServer(NewServerInterceptor()))
+
+	if _, err := callUnary(context.Background(), client, "hello"); err == nil {
+		t.Fatal("expected error")
 	}
 
-	if wrapped.cfg == nil {
-		t.Error("expected cfg to be set")
+	span := mt.FinishedSpans()[0]
+	if got := span.Tag(tagCode); got != connect.CodeCanceled.String() {
+		t.Errorf("expected connect.code canceled, got %v", got)
 	}
-
-	if wrapped.ctx == nil {
-		t.Error("expected ctx to be set")
+	if got := span.Tag("error"); got != nil && got != false {
+		t.Errorf("expected canceled not to be an error, got %v", got)
 	}
 }
