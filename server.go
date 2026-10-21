@@ -108,7 +108,15 @@ func NewServerInterceptor(opts ...Option) connect.ServerInterceptor {
 				span.SetTag(tagMethodKind, methodKind(spec.StreamType))
 				withPeerTags(info, span)
 				withMetadataTags(cfg, header, span)
-				defer func() { finishWithError(span, err, cfg) }()
+				defer func() {
+					// finish the span of a panicking handler as failed, then
+					// let the panic continue to whatever recovers it
+					if r := recover(); r != nil {
+						finishWithError(span, connect.Errorf(connect.CodeInternal, "panic: %v", r), cfg)
+						panic(r)
+					}
+					finishWithError(span, err, cfg)
+				}()
 				if unary && cfg.withRequestTags {
 					stream = &requestTaggingServerStream{ServerStream: stream, cfg: cfg, span: span}
 				}

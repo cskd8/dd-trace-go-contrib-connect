@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/textproto"
+	"slices"
 	"strings"
 
 	"connectrpc.com/connect/v2"
@@ -30,17 +32,13 @@ func (cfg *config) startSpanOptions(opts ...tracer.StartSpanOption) []tracer.Sta
 	return ret
 }
 
-// headerCarrier adapts a *connect.Header to the tracer's TextMapReader and
-// TextMapWriter so span contexts can be extracted from and injected into RPC
-// headers. A nil header carries nothing.
+// headerCarrier adapts a *connect.Header to the tracer's TextMapReader so span
+// contexts can be extracted from RPC headers. A nil header carries nothing.
 type headerCarrier struct {
 	header *connect.Header
 }
 
-var (
-	_ tracer.TextMapReader = headerCarrier{}
-	_ tracer.TextMapWriter = headerCarrier{}
-)
+var _ tracer.TextMapReader = headerCarrier{}
 
 // ForeachKey implements tracer.TextMapReader.
 func (c headerCarrier) ForeachKey(handler func(key, val string) error) error {
@@ -57,12 +55,45 @@ func (c headerCarrier) ForeachKey(handler func(key, val string) error) error {
 	return nil
 }
 
+// injectCarrier is a tracer.TextMapWriter over a *connect.Header which
+// remembers the previous values of the keys it writes so they can be restored.
+type injectCarrier struct {
+	header *connect.Header
+	// prev holds the values each written key had before, nil if it was unset.
+	prev map[string][]string
+}
+
+var _ tracer.TextMapWriter = (*injectCarrier)(nil)
+
 // Set implements tracer.TextMapWriter.
-func (c headerCarrier) Set(key, val string) {
-	if c.header == nil {
-		return
+func (c *injectCarrier) Set(key, val string) {
+	key = textproto.CanonicalMIMEHeaderKey(key)
+	if _, ok := c.prev[key]; !ok {
+		c.prev[key] = slices.Clone(c.header.Values(key))
 	}
 	c.header.Set(key, val)
+}
+
+// injectSpanContext injects sctx into the client request headers and returns
+// a function which restores the headers it wrote. The request headers belong
+// to the caller's CallInfo, which connect-go keeps when a context from
+// connect.NewClientContext is reused for later calls, so the injected trace
+// context must not outlive the call. Restore once the headers have been sent.
+func injectSpanContext(sctx *tracer.SpanContext, header *connect.Header) (restore func()) {
+	if header == nil {
+		return func() {}
+	}
+	c := &injectCarrier{header: header, prev: make(map[string][]string)}
+	_ = tracer.Inject(sctx, c)
+	return func() {
+		for key, vals := range c.prev {
+			if len(vals) == 0 {
+				header.Delete(key)
+			} else {
+				header.SetValues(key, vals)
+			}
+		}
+	}
 }
 
 // requestHeader returns the request headers of the RPC described by info, or

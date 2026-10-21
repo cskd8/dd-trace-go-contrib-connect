@@ -2,8 +2,6 @@ package connect
 
 import (
 	"context"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -158,9 +156,7 @@ func TestInterceptorsOverHTTP(t *testing.T) {
 	defer mt.Stop()
 
 	svc := &testService{}
-	mux := http.NewServeMux()
-	connecthttp.Mount(mux, svc.newServer(NewServerInterceptor(WithService("test-server"))))
-	httpServer := httptest.NewServer(mux)
+	httpServer := newHTTPServer(svc.newServer(NewServerInterceptor(WithService("test-server"))))
 	defer httpServer.Close()
 
 	client := connect.NewClient(

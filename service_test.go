@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 
 	"connectrpc.com/connect/v2"
+	"connectrpc.com/connect/v2/connecthttp"
 	"connectrpc.com/connect/v2/connectinprocess"
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/mocktracer"
 	"google.golang.org/protobuf/types/known/wrapperspb"
@@ -89,6 +92,13 @@ func (s *testService) newServer(interceptors ...connect.ServerInterceptor) *conn
 		},
 	)
 	return server
+}
+
+// newHTTPServer serves server over HTTP. Close it when done.
+func newHTTPServer(server *connect.Server) *httptest.Server {
+	mux := http.NewServeMux()
+	connecthttp.Mount(mux, server)
+	return httptest.NewServer(mux)
 }
 
 // newInProcessClient returns a client calling server in-process.

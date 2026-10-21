@@ -2,9 +2,11 @@ package connect
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"connectrpc.com/connect/v2"
+	"github.com/DataDog/dd-trace-go/v2/ddtrace/ext"
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/mocktracer"
 )
 
@@ -179,7 +181,50 @@ func TestServerInterceptorCanceledIsNotError(t *testing.T) {
 	if got := span.Tag(tagCode); got != connect.CodeCanceled.String() {
 		t.Errorf("expected connect.code canceled, got %v", got)
 	}
-	if got := span.Tag("error"); got != nil && got != false {
+	if got := span.Tag(ext.ErrorMsg); got != nil {
 		t.Errorf("expected canceled not to be an error, got %v", got)
+	}
+}
+
+func TestServerInterceptorPanic(t *testing.T) {
+	mt := mocktracer.Start()
+	defer mt.Stop()
+
+	var recovered any
+	recoverInterceptor := func(next connect.ServerFunc) connect.ServerFunc {
+		return func(ctx context.Context, spec connect.Spec, stream connect.ServerStream) (err error) {
+			defer func() {
+				if r := recover(); r != nil {
+					recovered = r
+					err = connect.NewError(connect.CodeInternal, "internal error")
+				}
+			}()
+			return next(ctx, spec, stream)
+		}
+	}
+	server := connect.NewServer(recoverInterceptor, NewServerInterceptor())
+	server.Register(connect.Method{
+		Spec: unarySpec,
+		Handler: func(context.Context, connect.Spec, connect.ServerStream) error {
+			panic("boom")
+		},
+	})
+
+	if _, err := callUnary(context.Background(), newInProcessClient(server), "hello"); connect.CodeOf(err) != connect.CodeInternal {
+		t.Fatalf("expected internal, got %v", err)
+	}
+	if recovered != "boom" {
+		t.Errorf("expected the panic to reach the outer interceptor, got %v", recovered)
+	}
+
+	spans := mt.FinishedSpans()
+	if len(spans) != 1 {
+		t.Fatalf("expected 1 span, got %d", len(spans))
+	}
+	if got := spans[0].Tag(tagCode); got != connect.CodeInternal.String() {
+		t.Errorf("expected connect.code internal, got %v", got)
+	}
+	if got, _ := spans[0].Tag(ext.ErrorMsg).(string); !strings.Contains(got, "boom") {
+		t.Errorf("expected the error message to contain the panic value, got %q", got)
 	}
 }

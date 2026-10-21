@@ -34,6 +34,8 @@ The server interceptor always traces unary calls; streaming calls and their
 messages are traced according to `WithStreamCalls` and `WithStreamMessages`.
 The client interceptor traces unary calls and injects the trace context into the
 request headers. For streaming client calls it only propagates the trace context.
+The injected headers are removed from the call's `CallInfo` once the call ends,
+so a context from `connect.NewClientContext` can be reused for later calls.
 
 ### Migrating from v1
 
