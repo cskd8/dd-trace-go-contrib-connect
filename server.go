@@ -93,6 +93,9 @@ func NewServerInterceptor(opts ...Option) connect.ServerInterceptor {
 			info, _ := connect.CallInfoForServerContext(ctx)
 			header := requestHeader(info)
 			unary := spec.StreamType == connect.StreamTypeUnary
+			// returned stays false when the handler panics or exits its
+			// goroutine with runtime.Goexit (e.g. t.FailNow)
+			returned := false
 			if unary || cfg.traceStreamCalls {
 				var span *tracer.Span
 				span, ctx = startSpan(
@@ -115,6 +118,10 @@ func NewServerInterceptor(opts ...Option) connect.ServerInterceptor {
 						finishWithError(span, connect.Errorf(connect.CodeInternal, "panic: %v", r), cfg)
 						panic(r)
 					}
+					if !returned {
+						finishWithError(span, connect.NewError(connect.CodeInternal, "handler exited without returning"), cfg)
+						return
+					}
 					finishWithError(span, err, cfg)
 				}()
 				if unary && cfg.withRequestTags {
@@ -133,6 +140,7 @@ func NewServerInterceptor(opts ...Option) connect.ServerInterceptor {
 				}
 			}
 			err = next(ctx, spec, stream)
+			returned = true
 			return err
 		}
 	}

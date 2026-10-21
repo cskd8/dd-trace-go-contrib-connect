@@ -132,14 +132,9 @@ func TestClientInterceptorStreamPropagatesOnly(t *testing.T) {
 	client := newInProcessClient(svc.newServer(), NewClientInterceptor())
 
 	parent, ctx := tracer.StartSpanFromContext(context.Background(), "parent")
-	ctx, info := connect.NewClientContext(ctx)
 	_, err := callServerStream(ctx, client, "hello")
 	requireNoError(t, err)
 	parent.Finish()
-
-	if info.RequestHeader().Has("X-Datadog-Parent-Id") {
-		t.Errorf("expected the propagated headers to be removed once the stream ended")
-	}
 
 	spans := mt.FinishedSpans()
 	if len(spans) != 1 || spans[0].OperationName() != "parent" {
@@ -183,50 +178,39 @@ func TestClientInterceptorReusedCallInfo(t *testing.T) {
 	svc := &testService{}
 	httpServer := newHTTPServer(svc.newServer(NewServerInterceptor()))
 	defer httpServer.Close()
-	newClient := func(opts ...Option) *connect.Client {
-		return connect.NewClient(
-			connecthttp.NewTransport(httpServer.Client(), httpServer.URL),
-			NewClientInterceptor(opts...),
-		)
-	}
-	traced := newClient()
-	untraced := newClient(WithUntracedMethods(unarySpec.Procedure))
+	client := connect.NewClient(
+		connecthttp.NewTransport(httpServer.Client(), httpServer.URL),
+		NewClientInterceptor(),
+	)
 
 	// a caller sets request headers once and reuses the CallInfo for every call
 	ctx, info := connect.NewClientContext(context.Background())
 	info.RequestHeader().Set("Authorization", "token")
-
-	_, err := callUnary(ctx, traced, "hello")
-	requireNoError(t, err)
-	for _, key := range []string{"X-Datadog-Trace-Id", "X-Datadog-Parent-Id", "Traceparent"} {
-		if info.RequestHeader().Has(key) {
-			t.Errorf("expected %s to be removed after the call", key)
-		}
+	for range 2 {
+		_, err := callUnary(ctx, client, "hello")
+		requireNoError(t, err)
 	}
-	if got := info.RequestHeader().Get("Authorization"); got != "token" {
-		t.Errorf("expected the caller's headers to be kept, got %q", got)
+	if got := svc.requestHeader("Authorization"); got != "token" {
+		t.Errorf("expected the caller's headers to be sent, got %q", got)
 	}
 
-	// neither of these calls propagates a trace context
-	_, err = callServerStream(ctx, traced, "hello")
-	requireNoError(t, err)
-	_, err = callUnary(ctx, untraced, "hello")
-	requireNoError(t, err)
-
+	// each traced call overwrites the trace context of the previous one
 	spans := spansByOperation(mt)
 	serverSpans := spans["connect.server.request"]
-	if len(serverSpans) != 3 || len(spans["connect.client.request"]) != 1 {
-		t.Fatalf("expected 3 server spans and 1 client span, got %v", mt.FinishedSpans())
+	clientSpans := spans["connect.client.request"]
+	if len(serverSpans) != 2 || len(clientSpans) != 2 {
+		t.Fatalf("expected 2 server spans and 2 client spans, got %v", mt.FinishedSpans())
 	}
-	clientSpan := spans["connect.client.request"][0]
-	var children int
-	for _, span := range serverSpans {
-		if span.ParentID() == clientSpan.SpanID() {
-			children++
+	for _, clientSpan := range clientSpans {
+		var children int
+		for _, serverSpan := range serverSpans {
+			if serverSpan.ParentID() == clientSpan.SpanID() {
+				children++
+			}
 		}
-	}
-	if children != 1 {
-		t.Errorf("expected only the traced call to continue the client span, got %d server spans", children)
+		if children != 1 {
+			t.Errorf("expected each client span to be continued by exactly 1 server span, got %d", children)
+		}
 	}
 }
 

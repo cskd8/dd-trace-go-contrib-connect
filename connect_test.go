@@ -3,11 +3,9 @@ package connect
 import (
 	"context"
 	"errors"
-	"strconv"
 	"testing"
 
 	"connectrpc.com/connect/v2"
-	"github.com/DataDog/dd-trace-go/v2/ddtrace/mocktracer"
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/tracer"
 )
 
@@ -149,10 +147,14 @@ func TestConfigDefaults(t *testing.T) {
 
 func TestHeaderCarrier(t *testing.T) {
 	header := &connect.Header{}
-	header.Set("X-Datadog-Trace-Id", "123")
+	carrier := headerCarrier{header: header}
+	carrier.Set("x-datadog-trace-id", "123")
 	header.Add("X-Multi", "a")
 	header.Add("X-Multi", "b")
-	carrier := headerCarrier{header: header}
+
+	if got := header.Get("X-Datadog-Trace-Id"); got != "123" {
+		t.Errorf("expected Set to write the header, got %q", got)
+	}
 
 	got := map[string][]string{}
 	if err := carrier.ForeachKey(func(key, val string) error {
@@ -173,52 +175,13 @@ func TestHeaderCarrier(t *testing.T) {
 
 func TestHeaderCarrierNil(t *testing.T) {
 	carrier := headerCarrier{}
+	carrier.Set("x-datadog-trace-id", "123")
 	if err := carrier.ForeachKey(func(string, string) error {
 		t.Error("expected no keys")
 		return nil
 	}); err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
-}
-
-func TestInjectSpanContextRestoresHeaders(t *testing.T) {
-	mt := mocktracer.Start()
-	defer mt.Stop()
-
-	span, _ := tracer.StartSpanFromContext(context.Background(), "test")
-	defer span.Finish()
-
-	header := &connect.Header{}
-	header.Set("Authorization", "token")
-	// a trace context the caller propagates by hand
-	header.Set("X-Datadog-Trace-Id", "123")
-
-	restore := injectSpanContext(span.Context(), header)
-	if got := header.Get("X-Datadog-Trace-Id"); got == "123" || got == "" {
-		t.Errorf("expected the trace id to be injected, got %q", got)
-	}
-	if got := header.Get("X-Datadog-Parent-Id"); got != strconv.FormatUint(span.Context().SpanID(), 10) {
-		t.Errorf("expected the parent id to be injected, got %q", got)
-	}
-
-	restore()
-	if got := header.Get("X-Datadog-Trace-Id"); got != "123" {
-		t.Errorf("expected the previous trace id to be restored, got %q", got)
-	}
-	if header.Has("X-Datadog-Parent-Id") || header.Has("Traceparent") {
-		t.Errorf("expected the injected headers to be removed, got %v", header)
-	}
-	if got := header.Get("Authorization"); got != "token" {
-		t.Errorf("expected other headers to be kept, got %q", got)
-	}
-}
-
-func TestInjectSpanContextNilHeader(t *testing.T) {
-	span, _ := tracer.StartSpanFromContext(context.Background(), "test")
-	defer span.Finish()
-
-	// must not panic
-	injectSpanContext(span.Context(), nil)()
 }
 
 func TestMethodKind(t *testing.T) {

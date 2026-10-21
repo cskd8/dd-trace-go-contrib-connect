@@ -34,8 +34,22 @@ The server interceptor always traces unary calls; streaming calls and their
 messages are traced according to `WithStreamCalls` and `WithStreamMessages`.
 The client interceptor traces unary calls and injects the trace context into the
 request headers. For streaming client calls it only propagates the trace context.
-The injected headers are removed from the call's `CallInfo` once the call ends,
-so a context from `connect.NewClientContext` can be reused for later calls.
+
+Like [otelconnect](https://github.com/connectrpc/otelconnect-go), the trace
+context is written into the request headers of the call's `CallInfo` and stays
+there after the call. connect-go keeps those headers when a context from
+`connect.NewClientContext` is reused, so a later call on that context that
+writes no trace context of its own sends the previous call's trace headers, and
+its server span becomes a child of the previous call. This happens for:
+
+- a streaming call when the context has no active span
+- a method excluded with `WithUntracedMethods` (or `WithIgnoredMethods`)
+
+A traced unary call, or a streaming call with an active span, overwrites them,
+except for keys the new trace context does not set (such as `baggage`).
+To avoid this, create a new context with `connect.NewClientContext` for each
+call, or delete the trace headers from `CallInfo.RequestHeader()` before such a
+call.
 
 ### Migrating from v1
 

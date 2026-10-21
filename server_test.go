@@ -2,6 +2,7 @@ package connect
 
 import (
 	"context"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -183,6 +184,30 @@ func TestServerInterceptorCanceledIsNotError(t *testing.T) {
 	}
 	if got := span.Tag(ext.ErrorMsg); got != nil {
 		t.Errorf("expected canceled not to be an error, got %v", got)
+	}
+}
+
+func TestServerInterceptorGoexit(t *testing.T) {
+	mt := mocktracer.Start()
+	defer mt.Stop()
+
+	serve := NewServerInterceptor()(func(context.Context, connect.Spec, connect.ServerStream) error {
+		runtime.Goexit()
+		return nil
+	})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = serve(context.Background(), unarySpec, nil)
+	}()
+	<-done
+
+	spans := mt.FinishedSpans()
+	if len(spans) != 1 {
+		t.Fatalf("expected 1 span, got %d", len(spans))
+	}
+	if got := spans[0].Tag(tagCode); got != connect.CodeInternal.String() {
+		t.Errorf("expected connect.code internal, got %v", got)
 	}
 }
 
