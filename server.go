@@ -76,14 +76,15 @@ func (s *messageTracingServerStream) Send(m any) (err error) {
 	return err
 }
 
-// handlerError returns the error to record for err returned by a handler, as
-// the client receives it. connect-go sends an error the handler received from
-// another RPC (a remote *connect.Error) to the client as internal. The cause is
-// not attached, so that a remote canceled error is not taken for a canceled
-// call.
+// handlerError replaces an error the handler received from another RPC (a
+// remote *connect.Error) with an internal error, as connect-go sends it to the
+// client. Other errors are recorded as they are; finishCallWithError gives
+// them the code connect-go sends. The message keeps the handler's wrapping,
+// and the cause is not attached so that a remote canceled error is not taken
+// for a canceled call.
 func handlerError(err error) error {
 	if cerr, ok := errors.AsType[*connect.Error](err); ok && cerr != nil && cerr.IsRemote() {
-		return connect.NewError(connect.CodeInternal, cerr.Error())
+		return connect.NewError(connect.CodeInternal, err.Error())
 	}
 	return err
 }
@@ -128,14 +129,14 @@ func NewServerInterceptor(opts ...Option) connect.ServerInterceptor {
 					// finish the span of a panicking handler as failed, then
 					// let the panic continue to whatever recovers it
 					if r := recover(); r != nil {
-						finishWithError(span, connect.Errorf(connect.CodeInternal, "panic: %v", r), cfg)
+						finishCallWithError(span, connect.Errorf(connect.CodeInternal, "panic: %v", r), cfg)
 						panic(r)
 					}
 					if !returned {
-						finishWithError(span, connect.NewError(connect.CodeInternal, "handler exited without returning"), cfg)
+						finishCallWithError(span, connect.NewError(connect.CodeInternal, "handler exited without returning"), cfg)
 						return
 					}
-					finishWithError(span, handlerError(err), cfg)
+					finishCallWithError(span, handlerError(err), cfg)
 				}()
 				if unary && cfg.withRequestTags {
 					stream = &requestTaggingServerStream{ServerStream: stream, cfg: cfg, span: span}

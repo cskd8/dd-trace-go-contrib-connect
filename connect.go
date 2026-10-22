@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"strings"
 
 	"connectrpc.com/connect/v2"
@@ -184,20 +185,61 @@ func withPeerTags(info *connect.CallInfo, span *tracer.Span) {
 	}
 }
 
-// finishWithError applies finish option and a tag with gRPC status code, disregarding OK, EOF and Canceled errors.
+// finishWithError finishes a message span, disregarding OK, EOF and Canceled
+// errors: a stream reports its clean end with an error wrapping io.EOF (coded
+// unknown by connecthttp).
 func finishWithError(span *tracer.Span, err error, cfg *config) {
 	if errors.Is(err, io.EOF) || errors.Is(err, context.Canceled) {
 		err = nil
 	}
-	code := codeOK
+	var code connect.Code
 	if err != nil {
-		errcode := connect.CodeOf(err)
-		if cfg.nonErrorCodes[errcode] {
+		code = connect.CodeOf(err)
+	}
+	finishSpan(span, err, code, cfg)
+}
+
+// finishCallWithError finishes the span of a call, the result of a server
+// handler or of a unary client call, with the code the client receives for
+// err: the code of a *connect.Error, even when its cause wraps io.EOF or
+// context.Canceled, and otherwise the code connect-go sends for an uncoded
+// error.
+func finishCallWithError(span *tracer.Span, err error, cfg *config) {
+	var code connect.Code
+	if err != nil {
+		code = errorCode(err)
+	}
+	finishSpan(span, err, code, cfg)
+}
+
+// errorCode returns the code connect-go sends for err: the code of the first
+// *connect.Error in its chain, canceled or deadline_exceeded for an uncoded
+// context error, and unknown for any other error.
+func errorCode(err error) connect.Code {
+	if cerr, ok := errors.AsType[*connect.Error](err); ok && cerr != nil {
+		return cerr.Code()
+	}
+	switch {
+	case errors.Is(err, context.Canceled):
+		return connect.CodeCanceled
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, os.ErrDeadlineExceeded):
+		return connect.CodeDeadlineExceeded
+	default:
+		return connect.CodeUnknown
+	}
+}
+
+// finishSpan tags the span with code, or ok when err is nil, and finishes it
+// as failed unless code is one of the non-error codes.
+func finishSpan(span *tracer.Span, err error, code connect.Code, cfg *config) {
+	codeTag := codeOK
+	if err != nil {
+		if cfg.nonErrorCodes[code] {
 			err = nil
 		}
-		code = errcode.String()
+		codeTag = code.String()
 	}
-	span.SetTag(tagCode, code)
+	span.SetTag(tagCode, codeTag)
 
 	// only allocate finishOptions if needed, and allocate the exact right size
 	var finishOptions []tracer.FinishOption

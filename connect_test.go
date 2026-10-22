@@ -3,9 +3,14 @@ package connect
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
+	"os"
 	"testing"
 
 	"connectrpc.com/connect/v2"
+	"github.com/DataDog/dd-trace-go/v2/ddtrace/ext"
+	"github.com/DataDog/dd-trace-go/v2/ddtrace/mocktracer"
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/tracer"
 )
 
@@ -198,5 +203,74 @@ func TestMethodKind(t *testing.T) {
 		if got := methodKind(tt.streamType); got != tt.expected {
 			t.Errorf("methodKind(%v) = %q, expected %q", tt.streamType, got, tt.expected)
 		}
+	}
+}
+
+func TestFinishCallWithError(t *testing.T) {
+	mt := mocktracer.Start()
+	defer mt.Stop()
+
+	tests := []struct {
+		name      string
+		err       error
+		wantCode  string
+		wantError bool
+	}{
+		{name: "no error", err: nil, wantCode: codeOK},
+		{
+			name:      "coded error with a canceled cause",
+			err:       connect.NewError(connect.CodeUnavailable, "db down").WithCause(context.Canceled),
+			wantCode:  "unavailable",
+			wantError: true,
+		},
+		{
+			name:      "coded error with an EOF cause",
+			err:       connect.NewError(connect.CodeInternal, "bad").WithCause(io.EOF),
+			wantCode:  "internal",
+			wantError: true,
+		},
+		{name: "coded canceled", err: connect.NewError(connect.CodeCanceled, "canceled"), wantCode: "canceled"},
+		{name: "uncoded canceled", err: context.Canceled, wantCode: "canceled"},
+		{name: "uncoded deadline exceeded", err: context.DeadlineExceeded, wantCode: "deadline_exceeded", wantError: true},
+		{name: "uncoded os deadline exceeded", err: fmt.Errorf("dial: %w", os.ErrDeadlineExceeded), wantCode: "deadline_exceeded", wantError: true},
+		{name: "uncoded EOF", err: fmt.Errorf("decode: %w", io.EOF), wantCode: "unknown", wantError: true},
+		{name: "uncoded error", err: errors.New("boom"), wantCode: "unknown", wantError: true},
+	}
+
+	cfg := &config{}
+	serverDefaults(cfg)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mt.Reset()
+			span, _ := tracer.StartSpanFromContext(context.Background(), "test")
+			finishCallWithError(span, tt.err, cfg)
+
+			got := mt.FinishedSpans()[0]
+			if code := got.Tag(tagCode); code != tt.wantCode {
+				t.Errorf("expected connect.code %q, got %v", tt.wantCode, code)
+			}
+			if isError := got.Tag(ext.ErrorMsg) != nil; isError != tt.wantError {
+				t.Errorf("expected error %v, got %v", tt.wantError, isError)
+			}
+		})
+	}
+}
+
+func TestFinishWithErrorEndOfStream(t *testing.T) {
+	mt := mocktracer.Start()
+	defer mt.Stop()
+
+	cfg := &config{}
+	serverDefaults(cfg)
+	// connecthttp reports the clean end of a stream as unknown wrapping io.EOF
+	span, _ := tracer.StartSpanFromContext(context.Background(), "test")
+	finishWithError(span, connect.NewError(connect.CodeUnknown, "EOF").WithCause(io.EOF), cfg)
+
+	got := mt.FinishedSpans()[0]
+	if code := got.Tag(tagCode); code != codeOK {
+		t.Errorf("expected a message span at the end of a stream to be ok, got %v", code)
+	}
+	if got.Tag(ext.ErrorMsg) != nil {
+		t.Error("expected no error")
 	}
 }

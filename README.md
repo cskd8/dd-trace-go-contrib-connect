@@ -39,8 +39,11 @@ Like [otelconnect](https://github.com/connectrpc/otelconnect-go), the trace
 context is written into the request headers of the call's `CallInfo` and stays
 there after the call. connect-go keeps those headers when a context from
 `connect.NewClientContext` is reused, so a later call on that context that
-writes no trace context of its own sends the previous call's trace headers, and
-its server span becomes a child of the previous call. This happens for:
+writes no trace context of its own sends the previous call's trace headers.
+Over `connecthttp` its server span becomes a child of the previous call; over
+`connectinprocess` that only happens when the caller has no active span, since
+the server then runs on the caller's context and takes the parent from it. This
+happens for:
 
 - a streaming call when the context has no active span
 - a unary method excluded with `WithUntracedMethods` (or `WithIgnoredMethods`)
@@ -49,8 +52,9 @@ A traced unary call, or a streaming call with an active span, overwrites the
 trace and parent IDs, but keys the new trace context does not set stay as they
 were: `x-datadog-origin` (so an unrelated trace can be marked as coming from
 synthetics), and the `baggage` / `ot-baggage-*` of the previous trace, which
-may contain user data. With `WithMetadataTags()`, these leftover keys also show
-up as `connect.metadata.*` tags on later client spans.
+may contain user data. These leftover keys also show up as `connect.metadata.*`
+tags on later client spans and on the server spans when the client or server
+interceptor uses `WithMetadataTags()`.
 
 To avoid this, create a new context with `connect.NewClientContext` for each
 call, or delete the trace headers from `CallInfo.RequestHeader()` before
@@ -73,6 +77,17 @@ traced unary call had it.
 A handler that returns an error it received from another RPC sends it to the
 client as `internal` in connect-go v2, and the server span records `internal`
 too. In v1 the downstream code was sent to the client and recorded as is.
+
+The `connect.code` of a call span (the server span of a handler and the client
+span of a unary call) is the code the client receives: a `*connect.Error` keeps
+its code even when its cause wraps `io.EOF` or `context.Canceled`, an uncoded
+`context.Canceled` / `context.DeadlineExceeded` becomes `canceled` /
+`deadline_exceeded`, and any other uncoded error `unknown`. In v1 any error
+wrapping `io.EOF` or `context.Canceled` was recorded as `ok` and an uncoded
+`context.DeadlineExceeded` as `unknown`; a unary call canceled by the client is
+now recorded as `canceled` (still not an error by default). Message spans of streaming calls
+still treat `io.EOF` and `context.Canceled` as `ok`, since a stream reports its
+clean end that way.
 
 ## Span tags
 

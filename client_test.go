@@ -9,6 +9,7 @@ import (
 
 	"connectrpc.com/connect/v2"
 	"connectrpc.com/connect/v2/connecthttp"
+	"github.com/DataDog/dd-trace-go/v2/ddtrace/ext"
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/mocktracer"
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/tracer"
 	"google.golang.org/protobuf/types/known/wrapperspb"
@@ -309,5 +310,31 @@ func TestClientInterceptorReceivePanic(t *testing.T) {
 	}
 	if got := spans[0].Tag(tagCode); got != connect.CodeInternal.String() {
 		t.Errorf("expected connect.code internal, got %v", got)
+	}
+}
+
+func TestInterceptorsCodedErrorWithCanceledCause(t *testing.T) {
+	mt := mocktracer.Start()
+	defer mt.Stop()
+
+	// the handler fails with unavailable because a database call was canceled
+	svc := &testService{err: connect.NewError(connect.CodeUnavailable, "db down").WithCause(context.Canceled)}
+	client := newInProcessClient(svc.newServer(NewServerInterceptor()), NewClientInterceptor())
+
+	_, err := callUnary(context.Background(), client, "hello")
+	if got := connect.CodeOf(err); got != connect.CodeUnavailable {
+		t.Fatalf("expected the client to receive unavailable, got %v", err)
+	}
+
+	for _, span := range mt.FinishedSpans() {
+		if got := span.Tag(tagCode); got != connect.CodeUnavailable.String() {
+			t.Errorf("expected connect.code unavailable on %s, got %v", span.OperationName(), got)
+		}
+		if got := span.Tag(ext.ErrorMsg); got == nil {
+			t.Errorf("expected %s to be marked as an error", span.OperationName())
+		}
+	}
+	if got := len(mt.FinishedSpans()); got != 2 {
+		t.Errorf("expected 2 spans, got %d", got)
 	}
 }

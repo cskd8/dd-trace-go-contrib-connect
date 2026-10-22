@@ -2,6 +2,7 @@ package connect
 
 import (
 	"context"
+	"fmt"
 	"runtime"
 	"strings"
 	"testing"
@@ -283,26 +284,36 @@ func TestServerInterceptorRemoteError(t *testing.T) {
 					}
 					res, err := callUnary(ctx, downstreamClient, req.GetValue())
 					if err != nil {
-						return err
+						return fmt.Errorf("fetch: %w", err)
 					}
 					return stream.Send(res)
 				},
 			})
 
-			_, err := callUnary(context.Background(), newInProcessClient(gateway), "hello")
+			// the in-process transport hands the downstream error to the
+			// client as the cause of the internal error it receives
+			client := newInProcessClient(gateway, NewClientInterceptor())
+			_, err := callUnary(context.Background(), client, "hello")
 			if got := connect.CodeOf(err); got != connect.CodeInternal {
 				t.Fatalf("expected the client to receive internal, got %v", err)
 			}
 
-			spans := mt.FinishedSpans()
-			if len(spans) != 1 {
-				t.Fatalf("expected 1 span, got %d", len(spans))
+			spans := spansByOperation(mt)
+			if len(spans["connect.server.request"]) != 1 || len(spans["connect.client.request"]) != 1 {
+				t.Fatalf("expected 1 server span and 1 client span, got %v", mt.FinishedSpans())
 			}
-			if got := spans[0].Tag(tagCode); got != connect.CodeInternal.String() {
-				t.Errorf("expected connect.code internal as the client receives, got %v", got)
+			serverSpan := spans["connect.server.request"][0]
+			for _, span := range []*mocktracer.Span{serverSpan, spans["connect.client.request"][0]} {
+				if got := span.Tag(tagCode); got != connect.CodeInternal.String() {
+					t.Errorf("expected connect.code internal as the client receives on %s, got %v", span.OperationName(), got)
+				}
+				if got := span.Tag(ext.ErrorMsg); got == nil {
+					t.Errorf("expected %s to be marked as an error", span.OperationName())
+				}
 			}
-			if got, _ := spans[0].Tag(ext.ErrorMsg).(string); !strings.Contains(got, "downstream") {
-				t.Errorf("expected the error message to keep the downstream error, got %q", got)
+			// the message keeps the handler's wrapping and the downstream error
+			if got, _ := serverSpan.Tag(ext.ErrorMsg).(string); !strings.Contains(got, "fetch: ") || !strings.Contains(got, "downstream") {
+				t.Errorf("expected the error message to keep the handler's wrapping, got %q", got)
 			}
 		})
 	}

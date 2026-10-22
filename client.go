@@ -99,7 +99,7 @@ func (s *unaryClientStream) recordError(err error) {
 }
 
 func (s *unaryClientStream) finish(err error) {
-	s.once.Do(func() { finishWithError(s.span, err, s.cfg) })
+	s.once.Do(func() { finishCallWithError(s.span, err, s.cfg) })
 }
 
 // NewClientInterceptor returns a connect.ClientInterceptor which traces unary
@@ -146,7 +146,7 @@ func NewClientInterceptor(opts ...Option) connect.ClientInterceptor {
 			// the transport sets the peer address and protocol when it opens the stream
 			withPeerTags(info, span)
 			if err != nil {
-				finishWithError(span, err, cfg)
+				finishCallWithError(span, err, cfg)
 				return nil, err
 			}
 			return &unaryClientStream{ClientStream: stream, cfg: cfg, span: span}, nil
