@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"connectrpc.com/connect/v2"
+	"connectrpc.com/connect/v2/connecthttp"
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/ext"
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/tracer"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -77,9 +78,8 @@ func requestHeader(info *connect.CallInfo) *connect.Header {
 
 // isUntraced reports whether no spans should be created for the procedure.
 func (cfg *config) isUntraced(procedure string) bool {
-	_, im := cfg.ignoredMethods[procedure]
-	_, um := cfg.untracedMethods[procedure]
-	return im || um
+	_, ok := cfg.untracedMethods[procedure]
+	return ok
 }
 
 // methodKind returns the connect.method.kind tag value for the stream type.
@@ -203,8 +203,12 @@ func finishWithError(span *tracer.Span, err error, cfg *config) {
 // handler or of a unary client call, with the code the client receives for
 // err: the code of a *connect.Error, even when its cause wraps io.EOF or
 // context.Canceled, and otherwise the code connect-go sends for an uncoded
-// error.
+// error. A not-modified error (an HTTP 304 response to a Connect GET request)
+// is a success.
 func finishCallWithError(span *tracer.Span, err error, cfg *config) {
+	if connecthttp.IsNotModifiedError(err) {
+		err = nil
+	}
 	var code connect.Code
 	if err != nil {
 		code = errorCode(err)

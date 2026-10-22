@@ -245,23 +245,6 @@ func TestWithAnalyticsRate(t *testing.T) {
 	}
 }
 
-func TestWithIgnoredMethods(t *testing.T) {
-	methods := []string{"/test.Service/Method1", "/test.Service/Method2"}
-	cfg := &config{}
-	option := WithIgnoredMethods(methods...)
-	option(cfg)
-
-	if len(cfg.ignoredMethods) != len(methods) {
-		t.Errorf("expected %d ignored methods, got %d", len(methods), len(cfg.ignoredMethods))
-	}
-
-	for _, method := range methods {
-		if _, exists := cfg.ignoredMethods[method]; !exists {
-			t.Errorf("expected %s to be in ignoredMethods", method)
-		}
-	}
-}
-
 func TestWithUntracedMethods(t *testing.T) {
 	methods := []string{"/test.Service/Method1", "/test.Service/Method2"}
 	cfg := &config{}

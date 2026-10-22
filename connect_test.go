@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"connectrpc.com/connect/v2"
+	"connectrpc.com/connect/v2/connecthttp"
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/ext"
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/mocktracer"
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/tracer"
@@ -235,6 +236,7 @@ func TestFinishCallWithError(t *testing.T) {
 		{name: "uncoded os deadline exceeded", err: fmt.Errorf("dial: %w", os.ErrDeadlineExceeded), wantCode: "deadline_exceeded", wantError: true},
 		{name: "uncoded EOF", err: fmt.Errorf("decode: %w", io.EOF), wantCode: "unknown", wantError: true},
 		{name: "uncoded error", err: errors.New("boom"), wantCode: "unknown", wantError: true},
+		{name: "not modified", err: connecthttp.NewNotModifiedError(), wantCode: codeOK},
 	}
 
 	cfg := &config{}

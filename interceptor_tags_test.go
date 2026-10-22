@@ -9,6 +9,7 @@ import (
 	"connectrpc.com/connect/v2/connecthttp"
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/ext"
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/mocktracer"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 func TestServerInterceptorSpanTags(t *testing.T) {
@@ -239,5 +240,52 @@ func TestServerInterceptorClientStreamRequestTags(t *testing.T) {
 	}
 	if tagged != 2 {
 		t.Errorf("expected 2 message spans with the request tag, got %d", tagged)
+	}
+}
+
+func TestInterceptorsNotModified(t *testing.T) {
+	mt := mocktracer.Start()
+	defer mt.Stop()
+
+	// a Connect GET request whose handler answers 304 Not Modified
+	getSpec := connect.Spec{
+		Procedure:        "/test.v1.TestService/Get",
+		StreamType:       connect.StreamTypeUnary,
+		IdempotencyLevel: connect.IdempotencyNoSideEffects,
+	}
+	server := connect.NewServer(NewServerInterceptor())
+	server.Register(connect.Method{
+		Spec: getSpec,
+		Handler: func(_ context.Context, _ connect.Spec, stream connect.ServerStream) error {
+			var req wrapperspb.StringValue
+			if err := stream.Receive(&req); err != nil {
+				return err
+			}
+			return connecthttp.NewNotModifiedError()
+		},
+	})
+	httpServer := newHTTPServer(server)
+	defer httpServer.Close()
+	client := connect.NewClient(
+		connecthttp.NewTransport(httpServer.Client(), httpServer.URL, connecthttp.WithHTTPGet()),
+		NewClientInterceptor(),
+	)
+
+	err := client.CallUnary(context.Background(), getSpec, wrapperspb.String("hello"), &wrapperspb.StringValue{})
+	if !connecthttp.IsNotModifiedError(err) {
+		t.Fatalf("expected a not-modified error, got %v", err)
+	}
+
+	spans := mt.FinishedSpans()
+	if len(spans) != 2 {
+		t.Fatalf("expected a server span and a client span, got %d", len(spans))
+	}
+	for _, span := range spans {
+		if got := span.Tag(tagCode); got != codeOK {
+			t.Errorf("expected connect.code ok on %s, got %v", span.OperationName(), got)
+		}
+		if got := span.Tag(ext.ErrorMsg); got != nil {
+			t.Errorf("expected %s not to be an error, got %v", span.OperationName(), got)
+		}
 	}
 }

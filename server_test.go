@@ -52,10 +52,6 @@ func TestServerInterceptorUntracedMethods(t *testing.T) {
 		opt  Option
 	}{
 		{
-			name: "with ignored methods",
-			opt:  WithIgnoredMethods(unarySpec.Procedure, serverStreamSpec.Procedure),
-		},
-		{
 			name: "with untraced methods",
 			opt:  WithUntracedMethods(unarySpec.Procedure, serverStreamSpec.Procedure),
 		},

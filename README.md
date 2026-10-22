@@ -46,7 +46,7 @@ the server then runs on the caller's context and takes the parent from it. This
 happens for:
 
 - a streaming call when the context has no active span
-- a unary method excluded with `WithUntracedMethods` (or `WithIgnoredMethods`)
+- a unary method excluded with `WithUntracedMethods`
 
 A traced unary call, or a streaming call with an active span, overwrites the
 trace and parent IDs, but keys the new trace context does not set stay as they
@@ -62,10 +62,12 @@ reusing it.
 
 ### Migrating from v1
 
-The options are unchanged. `NewServerInterceptor` and `NewClientInterceptor`
-now return `connect.ServerInterceptor` and `connect.ClientInterceptor`, which
-are passed to `connect.NewServer` and `connect.NewClient` instead of
-`connect.WithInterceptors`.
+`NewServerInterceptor` and `NewClientInterceptor` now return
+`connect.ServerInterceptor` and `connect.ClientInterceptor`, which are passed to
+`connect.NewServer` and `connect.NewClient` instead of
+`connect.WithInterceptors`. The options are unchanged, except that
+`InterceptorOption` and `WithIgnoredMethods`, deprecated in v1, are removed:
+use `Option` and `WithUntracedMethods` instead.
 
 connect-go v2 runs server interceptors before the request is unmarshaled, so
 the `connect.request` tag of `WithRequestTags()` is set once the handler
@@ -111,6 +113,9 @@ Other differences in the recorded spans:
 - When the transport fails to open a stream, the unary client span has no
   `connect.peer.addr` / `connect.protocol` tags; in v1 they came from the
   request before the call.
+- A not-modified error (`connecthttp.NewNotModifiedError`, sent as an HTTP 304
+  response to a Connect GET request) is recorded as `ok` on the server and
+  client spans; in v1 it was an `unknown` error.
 - `WithIgnoredMetadata` matches keys case-insensitively; in v1 only lowercase
   keys were ignored.
 - With `WithRequestTags()`, the `connect.message` span of a receive that fails
@@ -119,21 +124,30 @@ Other differences in the recorded spans:
 
 ## Span tags
 
-Tags set on every span:
+Tags set on every span, both call spans (`connect.server.request`,
+`connect.client.request`) and the `connect.message` spans of streaming calls:
 
 | Tag | Example |
 |-----|---------|
 | `connect.method.name` | `/example.v1.ExampleService/Get` |
-| `connect.method.kind` | `unary` |
 | `connect.code` | `ok`, `internal`, ... |
-| `connect.protocol` | `connect`, `grpc`, `grpcweb` |
-| `connect.peer.addr` | client address (server spans) / server host (client spans) |
 | `component` | `connectrpc.com/connect` |
 | `rpc.system` | `connect` |
 | `rpc.service` | `example.v1.ExampleService` |
 | `rpc.method` | `Get` |
 | `rpc.grpc.full_method` | `/example.v1.ExampleService/Get` |
+
+Tags set on call spans only:
+
+| Tag | Example |
+|-----|---------|
+| `connect.method.kind` | `unary`, `client_streaming`, `server_streaming`, `bidi_streaming` |
 | `span.kind` | `server` / `client` |
+| `connect.protocol` | `connect`, `grpc`, `grpcweb` |
+| `connect.peer.addr` | client address (server spans) / server host (client spans) |
+
+`connect.protocol` and `connect.peer.addr` are set only when the transport
+reports them: `connecthttp` does, `connectinprocess` does not.
 
 Opt-in tags:
 
