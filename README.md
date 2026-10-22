@@ -85,9 +85,15 @@ its code even when its cause wraps `io.EOF` or `context.Canceled`, an uncoded
 `deadline_exceeded`, and any other uncoded error `unknown`. In v1 any error
 wrapping `io.EOF` or `context.Canceled` was recorded as `ok` and an uncoded
 `context.DeadlineExceeded` as `unknown`; a unary call canceled by the client is
-now recorded as `canceled` (still not an error by default). Message spans of streaming calls
-still treat `io.EOF` and `context.Canceled` as `ok`, since a stream reports its
-clean end that way.
+now recorded as `canceled` (still not an error by default). Message spans of
+streaming calls still treat `io.EOF` and `context.Canceled` as `ok`, since a
+stream reports its clean end that way.
+
+An uncoded `os.ErrDeadlineExceeded` (returned by some dial and I/O timeouts) is
+recorded as `deadline_exceeded`, as `connecthttp` sends it. `connectinprocess`
+sends it to the client as `unknown`, so over the in-process transport the
+server span of a handler returning it says `deadline_exceeded` while the client
+and its span say `unknown`.
 
 ## Span tags
 

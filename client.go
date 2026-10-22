@@ -29,18 +29,24 @@ type unaryClientStream struct {
 	once           sync.Once
 }
 
-func (s *unaryClientStream) Send(msg any) error {
+func (s *unaryClientStream) Send(msg any) (err error) {
+	returned := false
+	defer s.finishIfAborted("send", &returned)
 	if !s.tagged {
 		s.tagged = true
 		withRequestTags(s.cfg, msg, s.span)
 	}
-	err := s.ClientStream.Send(msg)
+	err = s.ClientStream.Send(msg)
+	returned = true
 	s.recordError(err)
 	return err
 }
 
-func (s *unaryClientStream) CloseSend() error {
-	err := s.ClientStream.CloseSend()
+func (s *unaryClientStream) CloseSend() (err error) {
+	returned := false
+	defer s.finishIfAborted("close send", &returned)
+	err = s.ClientStream.CloseSend()
+	returned = true
 	s.recordError(err)
 	return err
 }
@@ -50,23 +56,26 @@ func (s *unaryClientStream) Receive(msg any) (err error) {
 	s.receiveStarted = true
 	s.mu.Unlock()
 	returned := false
-	defer func() {
-		if returned {
-			return
-		}
-		// finish the span when Receive panics or exits its goroutine with
-		// runtime.Goexit, then let the panic continue
-		if r := recover(); r != nil {
-			s.finish(connect.Errorf(connect.CodeInternal, "panic: %v", r))
-			panic(r)
-		}
-		s.finish(connect.NewError(connect.CodeInternal, "receive exited without returning"))
-	}()
+	defer s.finishIfAborted("receive", &returned)
 	err = s.ClientStream.Receive(msg)
 	returned = true
 	// a unary call ends with its single response
 	s.finish(err)
 	return err
+}
+
+// finishIfAborted is deferred by the stream methods. When the method panics
+// or exits its goroutine with runtime.Goexit, so returned is still false, it
+// finishes the span as internal and lets the panic continue.
+func (s *unaryClientStream) finishIfAborted(method string, returned *bool) {
+	if *returned {
+		return
+	}
+	if r := recover(); r != nil {
+		s.finish(connect.Errorf(connect.CodeInternal, "panic: %v", r))
+		panic(r)
+	}
+	s.finish(connect.NewError(connect.CodeInternal, method+" exited without returning"))
 }
 
 func (s *unaryClientStream) Close() error {

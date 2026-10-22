@@ -3,6 +3,8 @@ package connect
 import (
 	"context"
 	"errors"
+	"fmt"
+	"runtime"
 	"strconv"
 	"sync"
 	"testing"
@@ -36,29 +38,69 @@ func TestClientInterceptorErrorCode(t *testing.T) {
 	}
 }
 
-// unavailableTransport fails to open every stream.
-type unavailableTransport struct{}
+// openErrorTransport fails to open every stream with err.
+type openErrorTransport struct {
+	err error
+}
 
-func (unavailableTransport) NewClientStream(context.Context, connect.Spec) (connect.ClientStream, error) {
-	return nil, connect.NewError(connect.CodeUnavailable, "unavailable")
+func (t openErrorTransport) NewClientStream(context.Context, connect.Spec) (connect.ClientStream, error) {
+	return nil, t.err
 }
 
 func TestClientInterceptorOpenError(t *testing.T) {
-	mt := mocktracer.Start()
-	defer mt.Stop()
-
-	client := connect.NewClient(unavailableTransport{}, NewClientInterceptor())
-
-	if _, err := callUnary(context.Background(), client, "hello"); err == nil {
-		t.Fatal("expected error")
+	tests := []struct {
+		name      string
+		err       error
+		wantCode  connect.Code
+		wantError bool
+	}{
+		{
+			name:      "coded",
+			err:       connect.NewError(connect.CodeUnavailable, "unavailable"),
+			wantCode:  connect.CodeUnavailable,
+			wantError: true,
+		},
+		{
+			name:      "coded with a canceled cause",
+			err:       connect.NewError(connect.CodeUnavailable, "unavailable").WithCause(context.Canceled),
+			wantCode:  connect.CodeUnavailable,
+			wantError: true,
+		},
+		{
+			name:     "uncoded canceled",
+			err:      fmt.Errorf("token: %w", context.Canceled),
+			wantCode: connect.CodeCanceled,
+		},
+		{
+			name:      "uncoded deadline exceeded",
+			err:       fmt.Errorf("token: %w", context.DeadlineExceeded),
+			wantCode:  connect.CodeDeadlineExceeded,
+			wantError: true,
+		},
 	}
 
-	spans := mt.FinishedSpans()
-	if len(spans) != 1 {
-		t.Fatalf("expected 1 span, got %d", len(spans))
-	}
-	if got := spans[0].Tag(tagCode); got != connect.CodeUnavailable.String() {
-		t.Errorf("expected connect.code unavailable, got %v", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mt := mocktracer.Start()
+			defer mt.Stop()
+
+			client := connect.NewClient(openErrorTransport{err: tt.err}, NewClientInterceptor())
+
+			if _, err := callUnary(context.Background(), client, "hello"); err == nil {
+				t.Fatal("expected error")
+			}
+
+			spans := mt.FinishedSpans()
+			if len(spans) != 1 {
+				t.Fatalf("expected 1 span, got %d", len(spans))
+			}
+			if got := spans[0].Tag(tagCode); got != tt.wantCode.String() {
+				t.Errorf("expected connect.code %s, got %v", tt.wantCode, got)
+			}
+			if isError := spans[0].Tag(ext.ErrorMsg) != nil; isError != tt.wantError {
+				t.Errorf("expected error %v, got %v", tt.wantError, isError)
+			}
+		})
 	}
 }
 
@@ -274,36 +316,75 @@ func TestClientInterceptorCloseDuringReceive(t *testing.T) {
 	}
 }
 
-// panickingTransport opens streams whose Receive panics.
-type panickingTransport struct{}
-
-func (panickingTransport) NewClientStream(context.Context, connect.Spec) (connect.ClientStream, error) {
-	return panickingStream{}, nil
+// abortingTransport opens streams whose method named abort panics, or exits
+// the goroutine with runtime.Goexit when goexit is set.
+type abortingTransport struct {
+	abort  string
+	goexit bool
 }
 
-type panickingStream struct{}
+func (t abortingTransport) NewClientStream(context.Context, connect.Spec) (connect.ClientStream, error) {
+	return abortingStream(t), nil
+}
 
-func (panickingStream) SendHeaders() error { return nil }
-func (panickingStream) Send(any) error     { return nil }
-func (panickingStream) CloseSend() error   { return nil }
-func (panickingStream) Receive(any) error  { panic("boom") }
-func (panickingStream) Close() error       { return nil }
+type abortingStream struct {
+	abort  string
+	goexit bool
+}
 
-func TestClientInterceptorReceivePanic(t *testing.T) {
-	mt := mocktracer.Start()
-	defer mt.Stop()
-
-	client := connect.NewClient(panickingTransport{}, NewClientInterceptor())
-
-	recovered := func() (r any) {
-		defer func() { r = recover() }()
-		_, _ = callUnary(context.Background(), client, "hello")
-		return nil
-	}()
-	if recovered != "boom" {
-		t.Fatalf("expected the panic to reach the caller, got %v", recovered)
+func (s abortingStream) maybeAbort(method string) {
+	if method != s.abort {
+		return
 	}
+	if s.goexit {
+		runtime.Goexit()
+	}
+	panic("boom")
+}
 
+func (s abortingStream) SendHeaders() error { return nil }
+func (s abortingStream) Send(any) error     { s.maybeAbort("send"); return nil }
+func (s abortingStream) CloseSend() error   { s.maybeAbort("close send"); return nil }
+func (s abortingStream) Receive(any) error  { s.maybeAbort("receive"); return nil }
+func (s abortingStream) Close() error       { return nil }
+
+func TestClientInterceptorStreamAbort(t *testing.T) {
+	for _, method := range []string{"send", "close send", "receive"} {
+		t.Run(method+" panic", func(t *testing.T) {
+			mt := mocktracer.Start()
+			defer mt.Stop()
+
+			client := connect.NewClient(abortingTransport{abort: method}, NewClientInterceptor())
+			recovered := func() (r any) {
+				defer func() { r = recover() }()
+				_, _ = callUnary(context.Background(), client, "hello")
+				return nil
+			}()
+			if recovered != "boom" {
+				t.Fatalf("expected the panic to reach the caller, got %v", recovered)
+			}
+			requireInternalSpan(t, mt)
+		})
+
+		t.Run(method+" goexit", func(t *testing.T) {
+			mt := mocktracer.Start()
+			defer mt.Stop()
+
+			client := connect.NewClient(abortingTransport{abort: method, goexit: true}, NewClientInterceptor())
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				_, _ = callUnary(context.Background(), client, "hello")
+			}()
+			<-done
+			requireInternalSpan(t, mt)
+		})
+	}
+}
+
+// requireInternalSpan checks that exactly one span was finished, as internal.
+func requireInternalSpan(t *testing.T, mt mocktracer.Tracer) {
+	t.Helper()
 	spans := mt.FinishedSpans()
 	if len(spans) != 1 {
 		t.Fatalf("expected 1 finished span, got %d", len(spans))
