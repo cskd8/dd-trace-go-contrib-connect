@@ -1,6 +1,8 @@
 package connect
 
 import (
+	"strings"
+
 	"connectrpc.com/connect/v2"
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/tracer"
 )
@@ -163,12 +165,13 @@ func WithMetadataTags() Option {
 	}
 }
 
-// WithIgnoredMetadata specifies keys to be ignored while tracing the metadata. Must be used
-// in conjunction with WithMetadataTags.
+// WithIgnoredMetadata specifies keys to be ignored while tracing the metadata. Keys are
+// matched case-insensitively. Must be used in conjunction with WithMetadataTags.
 func WithIgnoredMetadata(ms ...string) Option {
 	return func(cfg *config) {
 		for _, e := range ms {
-			cfg.ignoredMetadata[e] = struct{}{}
+			// withMetadataTags looks up the lowercased header key
+			cfg.ignoredMetadata[strings.ToLower(e)] = struct{}{}
 		}
 	}
 }

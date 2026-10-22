@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
@@ -363,7 +364,8 @@ func TestClientInterceptorStreamAbort(t *testing.T) {
 			if recovered != "boom" {
 				t.Fatalf("expected the panic to reach the caller, got %v", recovered)
 			}
-			requireInternalSpan(t, mt)
+			// the panic value shows recover() caught it; Goexit records another message
+			requireInternalSpan(t, mt, "panic: boom")
 		})
 
 		t.Run(method+" goexit", func(t *testing.T) {
@@ -377,13 +379,14 @@ func TestClientInterceptorStreamAbort(t *testing.T) {
 				_, _ = callUnary(context.Background(), client, "hello")
 			}()
 			<-done
-			requireInternalSpan(t, mt)
+			requireInternalSpan(t, mt, method+" exited without returning")
 		})
 	}
 }
 
-// requireInternalSpan checks that exactly one span was finished, as internal.
-func requireInternalSpan(t *testing.T, mt mocktracer.Tracer) {
+// requireInternalSpan checks that exactly one span was finished, as internal
+// with an error message containing msg.
+func requireInternalSpan(t *testing.T, mt mocktracer.Tracer, msg string) {
 	t.Helper()
 	spans := mt.FinishedSpans()
 	if len(spans) != 1 {
@@ -391,6 +394,9 @@ func requireInternalSpan(t *testing.T, mt mocktracer.Tracer) {
 	}
 	if got := spans[0].Tag(tagCode); got != connect.CodeInternal.String() {
 		t.Errorf("expected connect.code internal, got %v", got)
+	}
+	if got, _ := spans[0].Tag(ext.ErrorMsg).(string); !strings.Contains(got, msg) {
+		t.Errorf("expected the error message to contain %q, got %q", msg, got)
 	}
 }
 

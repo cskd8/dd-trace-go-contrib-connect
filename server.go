@@ -54,7 +54,11 @@ func (s *messageTracingServerStream) Receive(m any) (err error) {
 	)
 	defer func() {
 		withMetadataTags(s.cfg, s.header, span)
-		withRequestTags(s.cfg, m, span)
+		// m holds a request only when it was received, not at the end of the
+		// stream or on an error
+		if err == nil {
+			withRequestTags(s.cfg, m, span)
+		}
 		finishWithError(span, err, s.cfg)
 	}()
 	err = s.ServerStream.Receive(m)

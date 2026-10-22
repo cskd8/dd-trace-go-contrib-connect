@@ -194,3 +194,50 @@ func TestInterceptorsOverHTTP(t *testing.T) {
 		t.Errorf("expected client service test-client, got %v", got)
 	}
 }
+
+func TestServerInterceptorIgnoredMetadataCase(t *testing.T) {
+	mt := mocktracer.Start()
+	defer mt.Stop()
+
+	svc := &testService{}
+	client := newInProcessClient(svc.newServer(NewServerInterceptor(WithMetadataTags(), WithIgnoredMetadata("X-Secret"))))
+
+	ctx, info := connect.NewClientContext(context.Background())
+	info.RequestHeader().Set("X-Secret", "s")
+	_, err := callUnary(ctx, client, "hello")
+	requireNoError(t, err)
+
+	if got := mt.FinishedSpans()[0].Tag(tagMetadataPrefix + "x-secret.0"); got != nil {
+		t.Errorf("expected X-Secret to be ignored, got %v", got)
+	}
+}
+
+func TestServerInterceptorClientStreamRequestTags(t *testing.T) {
+	mt := mocktracer.Start()
+	defer mt.Stop()
+
+	svc := &testService{}
+	client := newInProcessClient(svc.newServer(NewServerInterceptor(WithRequestTags())))
+
+	n, err := callClientStream(context.Background(), client, "a", "b")
+	requireNoError(t, err)
+	if n != 2 {
+		t.Fatalf("expected the server to receive 2 messages, got %d", n)
+	}
+
+	messages := spansByOperation(mt)["connect.message"]
+	var tagged int
+	for _, span := range messages {
+		if span.Tag(tagRequest) != nil {
+			tagged++
+		}
+	}
+	// the handler receives 2 messages and then the end of the stream, and
+	// sends 1 response; only the received messages are tagged
+	if len(messages) != 4 {
+		t.Fatalf("expected 4 message spans, got %d", len(messages))
+	}
+	if tagged != 2 {
+		t.Errorf("expected 2 message spans with the request tag, got %d", tagged)
+	}
+}

@@ -95,6 +95,28 @@ sends it to the client as `unknown`, so over the in-process transport the
 server span of a handler returning it says `deadline_exceeded` while the client
 and its span say `unknown`.
 
+Other differences in the recorded spans:
+
+- The server span of a handler that panics or exits with `runtime.Goexit`
+  (e.g. `t.FailNow`), and the client span of a unary call whose `Send`,
+  `CloseSend` or `Receive` panics or exits with `runtime.Goexit`, finish as
+  `internal`, and the panic continues. In v1 these unary spans were never
+  finished, and the call span of a streaming handler was finished as `ok`.
+- The unary server span also covers reading and unmarshaling the request, so a
+  malformed unary request produces an error span. In v1 it was rejected before
+  the interceptor ran, with no span.
+- A server-streaming call has one `connect.message` span fewer: v1 traced an
+  extra receive checking that the client sent exactly one request, which the
+  v2 transport does inside the single `Receive`.
+- When the transport fails to open a stream, the unary client span has no
+  `connect.peer.addr` / `connect.protocol` tags; in v1 they came from the
+  request before the call.
+- `WithIgnoredMetadata` matches keys case-insensitively; in v1 only lowercase
+  keys were ignored.
+- With `WithRequestTags()`, the `connect.message` span of a receive that fails
+  or reaches the end of the stream has no `connect.request` tag; in v1 it was
+  tagged with the empty or partial message.
+
 ## Span tags
 
 Tags set on every span:
@@ -117,7 +139,7 @@ Opt-in tags:
 
 - `WithMetadataTags()` — request headers as `connect.metadata.*` tags
   (propagation headers are excluded by default; add more exclusions with
-  `WithIgnoredMetadata(...)`)
+  `WithIgnoredMetadata(...)`, matched case-insensitively)
 - `WithRequestTags()` — the request message serialized as JSON in the
   `connect.request` tag
 

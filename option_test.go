@@ -305,6 +305,17 @@ func TestWithIgnoredMetadata(t *testing.T) {
 	}
 }
 
+func TestWithIgnoredMetadataCaseInsensitive(t *testing.T) {
+	cfg := &config{}
+	serverDefaults(cfg)
+	WithIgnoredMetadata("X-Secret")(cfg)
+
+	// withMetadataTags looks up the lowercased header key
+	if _, exists := cfg.ignoredMetadata["x-secret"]; !exists {
+		t.Errorf("expected X-Secret to be ignored as x-secret, got %v", cfg.ignoredMetadata)
+	}
+}
+
 func TestWithRequestTags(t *testing.T) {
 	cfg := &config{}
 	option := WithRequestTags()
