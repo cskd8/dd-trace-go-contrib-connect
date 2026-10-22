@@ -115,7 +115,11 @@ Other differences in the recorded spans:
   request before the call.
 - A not-modified error (`connecthttp.NewNotModifiedError`, sent as an HTTP 304
   response to a Connect GET request) is recorded as `ok` on the server and
-  client spans; in v1 it was an `unknown` error.
+  client spans, also when a handler returns one it received from another RPC;
+  in v1 it was an `unknown` error. Over `connectinprocess`, such a forwarded
+  not-modified error reaches the client with code `internal`, although
+  `connecthttp.IsNotModifiedError` still reports true and the client span
+  records `ok`.
 - `WithIgnoredMetadata` matches keys case-insensitively; in v1 only lowercase
   keys were ignored.
 - With `WithRequestTags()`, the `connect.message` span of a receive that fails

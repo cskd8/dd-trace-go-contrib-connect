@@ -35,10 +35,6 @@ func defaults(cfg *config) {
 	cfg.traceStreamCalls = true
 	cfg.traceStreamMessages = true
 	cfg.nonErrorCodes = map[connect.Code]bool{connect.CodeCanceled: true}
-	// cfg.spanOpts = append(cfg.spanOpts, tracer.AnalyticsRate(globalconfig.AnalyticsRate()))
-	//if internal.BoolEnv("DD_TRACE_GRPC_ANALYTICS_ENABLED", false) {
-	//	cfg.spanOpts = append(cfg.spanOpts, tracer.AnalyticsRate(1.0))
-	//}
 	cfg.ignoredMetadata = map[string]struct{}{
 		"x-datadog-trace-id":          {},
 		"x-datadog-parent-id":         {},
@@ -50,8 +46,6 @@ func defaults(cfg *config) {
 }
 
 func serverDefaults(cfg *config) {
-	// We check for a configured service name, so we don't break users who are incorrectly creating their server
-	// before the call `tracer.Start()`
 	cfg.serviceName = func() string { return defaultServerServiceName }
 	cfg.spanName = "connect.server.request"
 	defaults(cfg)
@@ -173,7 +167,7 @@ func WithCustomTag(key string, value interface{}) Option {
 	}
 }
 
-// WithSpanOptions defines a set of additional ddtrace.StartSpanOption to be added
+// WithSpanOptions defines a set of additional tracer.StartSpanOption to be added
 // to spans started by the integration.
 func WithSpanOptions(opts ...tracer.StartSpanOption) Option {
 	return func(cfg *config) {

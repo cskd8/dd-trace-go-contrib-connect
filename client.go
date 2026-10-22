@@ -31,7 +31,7 @@ type unaryClientStream struct {
 
 func (s *unaryClientStream) Send(msg any) (err error) {
 	returned := false
-	defer s.finishIfAborted("send", &returned)
+	defer finishIfAborted(s.finish, "send", &returned)
 	if !s.tagged {
 		s.tagged = true
 		withRequestTags(s.cfg, msg, s.span)
@@ -44,7 +44,7 @@ func (s *unaryClientStream) Send(msg any) (err error) {
 
 func (s *unaryClientStream) CloseSend() (err error) {
 	returned := false
-	defer s.finishIfAborted("close send", &returned)
+	defer finishIfAborted(s.finish, "close send", &returned)
 	err = s.ClientStream.CloseSend()
 	returned = true
 	s.recordError(err)
@@ -56,7 +56,7 @@ func (s *unaryClientStream) Receive(msg any) (err error) {
 	s.receiveStarted = true
 	s.mu.Unlock()
 	returned := false
-	defer s.finishIfAborted("receive", &returned)
+	defer finishIfAborted(s.finish, "receive", &returned)
 	err = s.ClientStream.Receive(msg)
 	returned = true
 	// a unary call ends with its single response
@@ -64,18 +64,20 @@ func (s *unaryClientStream) Receive(msg any) (err error) {
 	return err
 }
 
-// finishIfAborted is deferred by the stream methods. When the method panics
-// or exits its goroutine with runtime.Goexit, so returned is still false, it
-// finishes the span as internal and lets the panic continue.
-func (s *unaryClientStream) finishIfAborted(method string, returned *bool) {
+// finishIfAborted is deferred around a call that finishes the span when it
+// returns. When the call panics or exits its goroutine with runtime.Goexit, so
+// returned is still false, it finishes the span as internal through finish and
+// lets the panic continue. It calls recover itself, so it must be the deferred
+// function.
+func finishIfAborted(finish func(error), what string, returned *bool) {
 	if *returned {
 		return
 	}
 	if r := recover(); r != nil {
-		s.finish(connect.Errorf(connect.CodeInternal, "panic: %v", r))
+		finish(connect.Errorf(connect.CodeInternal, "panic: %v", r))
 		panic(r)
 	}
-	s.finish(connect.NewError(connect.CodeInternal, method+" exited without returning"))
+	finish(connect.NewError(connect.CodeInternal, what+" exited without returning"))
 }
 
 func (s *unaryClientStream) Close() error {
@@ -151,7 +153,10 @@ func NewClientInterceptor(opts ...Option) connect.ClientInterceptor {
 			withMetadataTags(cfg, header, span)
 			// propagate the span context to the server through the request headers
 			_ = tracer.Inject(span.Context(), headerCarrier{header: header})
+			opened := false
+			defer finishIfAborted(func(err error) { finishCallWithError(span, err, cfg) }, "open", &opened)
 			stream, err := next(ctx, spec)
+			opened = true
 			// the transport sets the peer address and protocol when it opens the stream
 			withPeerTags(info, span)
 			if err != nil {

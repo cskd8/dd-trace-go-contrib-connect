@@ -289,3 +289,59 @@ func TestInterceptorsNotModified(t *testing.T) {
 		}
 	}
 }
+
+func TestInterceptorsForwardedNotModified(t *testing.T) {
+	mt := mocktracer.Start()
+	defer mt.Stop()
+
+	getSpec := connect.Spec{
+		Procedure:        "/test.v1.TestService/Get",
+		StreamType:       connect.StreamTypeUnary,
+		IdempotencyLevel: connect.IdempotencyNoSideEffects,
+	}
+	// the gateway forwards the not-modified error of an in-process downstream,
+	// which reaches it as a remote error
+	downstream := connect.NewServer()
+	downstream.Register(connect.Method{
+		Spec: getSpec,
+		Handler: func(context.Context, connect.Spec, connect.ServerStream) error {
+			return connecthttp.NewNotModifiedError()
+		},
+	})
+	downstreamClient := newInProcessClient(downstream)
+	gateway := connect.NewServer(NewServerInterceptor())
+	gateway.Register(connect.Method{
+		Spec: getSpec,
+		Handler: func(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+			var req wrapperspb.StringValue
+			if err := stream.Receive(&req); err != nil {
+				return err
+			}
+			return downstreamClient.CallUnary(ctx, getSpec, &req, &wrapperspb.StringValue{})
+		},
+	})
+	httpServer := newHTTPServer(gateway)
+	defer httpServer.Close()
+	client := connect.NewClient(
+		connecthttp.NewTransport(httpServer.Client(), httpServer.URL, connecthttp.WithHTTPGet()),
+		NewClientInterceptor(),
+	)
+
+	err := client.CallUnary(context.Background(), getSpec, wrapperspb.String("hello"), &wrapperspb.StringValue{})
+	if !connecthttp.IsNotModifiedError(err) {
+		t.Fatalf("expected the client to receive a not-modified error, got %v", err)
+	}
+
+	spans := spansByOperation(mt)
+	if len(spans["connect.server.request"]) != 1 || len(spans["connect.client.request"]) != 1 {
+		t.Fatalf("expected 1 server span and 1 client span, got %v", mt.FinishedSpans())
+	}
+	for _, span := range mt.FinishedSpans() {
+		if got := span.Tag(tagCode); got != codeOK {
+			t.Errorf("expected connect.code ok on %s, got %v", span.OperationName(), got)
+		}
+		if got := span.Tag(ext.ErrorMsg); got != nil {
+			t.Errorf("expected %s not to be an error, got %v", span.OperationName(), got)
+		}
+	}
+}

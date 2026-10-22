@@ -325,7 +325,9 @@ type abortingTransport struct {
 }
 
 func (t abortingTransport) NewClientStream(context.Context, connect.Spec) (connect.ClientStream, error) {
-	return abortingStream(t), nil
+	stream := abortingStream(t)
+	stream.maybeAbort("open")
+	return stream, nil
 }
 
 type abortingStream struct {
@@ -350,7 +352,7 @@ func (s abortingStream) Receive(any) error  { s.maybeAbort("receive"); return ni
 func (s abortingStream) Close() error       { return nil }
 
 func TestClientInterceptorStreamAbort(t *testing.T) {
-	for _, method := range []string{"send", "close send", "receive"} {
+	for _, method := range []string{"open", "send", "close send", "receive"} {
 		t.Run(method+" panic", func(t *testing.T) {
 			mt := mocktracer.Start()
 			defer mt.Stop()

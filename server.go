@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"connectrpc.com/connect/v2"
+	"connectrpc.com/connect/v2/connecthttp"
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/ext"
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/tracer"
 )
@@ -85,8 +86,12 @@ func (s *messageTracingServerStream) Send(m any) (err error) {
 // client. Other errors are recorded as they are; finishCallWithError gives
 // them the code connect-go sends. The message keeps the handler's wrapping,
 // and the cause is not attached so that a remote canceled error is not taken
-// for a canceled call.
+// for a canceled call. A not-modified error is kept even when it came from
+// another RPC: connect-go finds it through the cause and still answers 304.
 func handlerError(err error) error {
+	if connecthttp.IsNotModifiedError(err) {
+		return err
+	}
 	if cerr, ok := errors.AsType[*connect.Error](err); ok && cerr != nil && cerr.IsRemote() {
 		return connect.NewError(connect.CodeInternal, err.Error())
 	}
