@@ -203,8 +203,10 @@ func finishWithError(span *tracer.Span, err error, cfg *config) {
 // handler or of a unary client call, with the code the client receives for
 // err: the code of a *connect.Error, even when its cause wraps io.EOF or
 // context.Canceled, and otherwise the code connect-go sends for an uncoded
-// error. A not-modified error (an HTTP 304 response to a Connect GET request)
-// is a success.
+// error. A not-modified error (connecthttp.NewNotModifiedError) is a success
+// whatever the protocol, like otelconnect, although connect-go answers it with
+// HTTP 304 only to a Connect GET request and sends it to other requests as an
+// error.
 func finishCallWithError(span *tracer.Span, err error, cfg *config) {
 	if connecthttp.IsNotModifiedError(err) {
 		err = nil

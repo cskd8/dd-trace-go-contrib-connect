@@ -87,7 +87,9 @@ func (s *messageTracingServerStream) Send(m any) (err error) {
 // them the code connect-go sends. The message keeps the handler's wrapping,
 // and the cause is not attached so that a remote canceled error is not taken
 // for a canceled call. A not-modified error is kept even when it came from
-// another RPC: connect-go finds it through the cause and still answers 304.
+// another RPC, so that finishCallWithError records it as a success whatever
+// the protocol; to a Connect GET request connect-go finds it through the cause
+// and answers 304.
 func handlerError(err error) error {
 	if connecthttp.IsNotModifiedError(err) {
 		return err

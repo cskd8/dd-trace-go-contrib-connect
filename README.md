@@ -89,7 +89,8 @@ wrapping `io.EOF` or `context.Canceled` was recorded as `ok` and an uncoded
 `context.DeadlineExceeded` as `unknown`; a unary call canceled by the client is
 now recorded as `canceled` (still not an error by default). Message spans of
 streaming calls still treat `io.EOF` and `context.Canceled` as `ok`, since a
-stream reports its clean end that way.
+stream reports its clean end that way. A not-modified error is the exception:
+it is always recorded as `ok` (see below).
 
 An uncoded `os.ErrDeadlineExceeded` (returned by some dial and I/O timeouts) is
 recorded as `deadline_exceeded`, as `connecthttp` sends it. `connectinprocess`
@@ -100,9 +101,9 @@ and its span say `unknown`.
 Other differences in the recorded spans:
 
 - The server span of a handler that panics or exits with `runtime.Goexit`
-  (e.g. `t.FailNow`), and the client span of a unary call whose `Send`,
-  `CloseSend` or `Receive` panics or exits with `runtime.Goexit`, finish as
-  `internal`, and the panic continues. In v1 these unary spans were never
+  (e.g. `t.FailNow`), and the client span of a unary call when opening the
+  stream, `Send`, `CloseSend` or `Receive` panics or exits with
+  `runtime.Goexit`, finish as `internal`, and the panic continues. In v1 these unary spans were never
   finished, and the call span of a streaming handler was finished as `ok`.
 - The unary server span also covers reading and unmarshaling the request, so a
   malformed unary request produces an error span. In v1 it was rejected before
@@ -113,13 +114,16 @@ Other differences in the recorded spans:
 - When the transport fails to open a stream, the unary client span has no
   `connect.peer.addr` / `connect.protocol` tags; in v1 they came from the
   request before the call.
-- A not-modified error (`connecthttp.NewNotModifiedError`, sent as an HTTP 304
-  response to a Connect GET request) is recorded as `ok` on the server and
-  client spans, also when a handler returns one it received from another RPC;
-  in v1 it was an `unknown` error. Over `connectinprocess`, such a forwarded
-  not-modified error reaches the client with code `internal`, although
-  `connecthttp.IsNotModifiedError` still reports true and the client span
-  records `ok`.
+- A not-modified error (`connecthttp.NewNotModifiedError`) is recorded as `ok`
+  on the server span whatever the protocol, also when a handler returns one it
+  received from another RPC, like otelconnect; in v1 it was an `unknown` error.
+  connect-go answers it with HTTP 304 only to a Connect GET request, and the
+  client span then records `ok` too. To any other request (a Connect POST,
+  gRPC, gRPC-Web or a streaming call) it is sent as an error (`unknown`, or
+  `internal` for a forwarded one), which the client span records. Over
+  `connectinprocess`, a forwarded not-modified error reaches the client with
+  code `internal`, although `connecthttp.IsNotModifiedError` still reports true
+  and the client span records `ok`.
 - `WithIgnoredMetadata` matches keys case-insensitively; in v1 only lowercase
   keys were ignored.
 - With `WithRequestTags()`, the `connect.message` span of a receive that fails
