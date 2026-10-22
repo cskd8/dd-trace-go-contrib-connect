@@ -9,6 +9,7 @@ import (
 	"connectrpc.com/connect/v2"
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/ext"
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/mocktracer"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 func TestNewServerInterceptor(t *testing.T) {
@@ -251,5 +252,58 @@ func TestServerInterceptorPanic(t *testing.T) {
 	}
 	if got, _ := spans[0].Tag(ext.ErrorMsg).(string); !strings.Contains(got, "boom") {
 		t.Errorf("expected the error message to contain the panic value, got %q", got)
+	}
+}
+
+func TestServerInterceptorRemoteError(t *testing.T) {
+	tests := []struct {
+		name string
+		code connect.Code
+	}{
+		{name: "not found", code: connect.CodeNotFound},
+		// canceled is not an error by default, but the client receives internal
+		{name: "canceled", code: connect.CodeCanceled},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mt := mocktracer.Start()
+			defer mt.Stop()
+
+			// the gateway returns the error of its call to the downstream as is
+			downstream := (&testService{err: connect.NewError(tt.code, "downstream")}).newServer()
+			downstreamClient := newInProcessClient(downstream)
+			gateway := connect.NewServer(NewServerInterceptor())
+			gateway.Register(connect.Method{
+				Spec: unarySpec,
+				Handler: func(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+					var req wrapperspb.StringValue
+					if err := stream.Receive(&req); err != nil {
+						return err
+					}
+					res, err := callUnary(ctx, downstreamClient, req.GetValue())
+					if err != nil {
+						return err
+					}
+					return stream.Send(res)
+				},
+			})
+
+			_, err := callUnary(context.Background(), newInProcessClient(gateway), "hello")
+			if got := connect.CodeOf(err); got != connect.CodeInternal {
+				t.Fatalf("expected the client to receive internal, got %v", err)
+			}
+
+			spans := mt.FinishedSpans()
+			if len(spans) != 1 {
+				t.Fatalf("expected 1 span, got %d", len(spans))
+			}
+			if got := spans[0].Tag(tagCode); got != connect.CodeInternal.String() {
+				t.Errorf("expected connect.code internal as the client receives, got %v", got)
+			}
+			if got, _ := spans[0].Tag(ext.ErrorMsg).(string); !strings.Contains(got, "downstream") {
+				t.Errorf("expected the error message to keep the downstream error, got %q", got)
+			}
+		})
 	}
 }

@@ -21,11 +21,12 @@ type unaryClientStream struct {
 	tagged bool
 
 	mu sync.Mutex
-	// receiving is set while a Receive is in flight. A Close during it
-	// unblocks the Receive, which then finishes the span with its own error.
-	receiving bool
-	err       error
-	once      sync.Once
+	// receiveStarted is set once Receive is called. From then on Receive
+	// finishes the span: a Close during it unblocks the Receive, which then
+	// finishes the span with its own error.
+	receiveStarted bool
+	err            error
+	once           sync.Once
 }
 
 func (s *unaryClientStream) Send(msg any) error {
@@ -44,29 +45,39 @@ func (s *unaryClientStream) CloseSend() error {
 	return err
 }
 
-func (s *unaryClientStream) Receive(msg any) error {
+func (s *unaryClientStream) Receive(msg any) (err error) {
 	s.mu.Lock()
-	s.receiving = true
+	s.receiveStarted = true
 	s.mu.Unlock()
-	err := s.ClientStream.Receive(msg)
-	// a unary call ends with its single response; finish before clearing
-	// receiving so that a concurrent Close cannot finish the span first
+	returned := false
+	defer func() {
+		if returned {
+			return
+		}
+		// finish the span when Receive panics or exits its goroutine with
+		// runtime.Goexit, then let the panic continue
+		if r := recover(); r != nil {
+			s.finish(connect.Errorf(connect.CodeInternal, "panic: %v", r))
+			panic(r)
+		}
+		s.finish(connect.NewError(connect.CodeInternal, "receive exited without returning"))
+	}()
+	err = s.ClientStream.Receive(msg)
+	returned = true
+	// a unary call ends with its single response
 	s.finish(err)
-	s.mu.Lock()
-	s.receiving = false
-	s.mu.Unlock()
 	return err
 }
 
 func (s *unaryClientStream) Close() error {
 	closeErr := s.ClientStream.Close()
 	s.mu.Lock()
-	receiving := s.receiving
+	receiveStarted := s.receiveStarted
 	// the span reports the error of the call, which is the first send error
 	// when the response was never received
 	err := s.err
 	s.mu.Unlock()
-	if receiving {
+	if receiveStarted {
 		return closeErr
 	}
 	if err == nil {

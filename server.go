@@ -2,6 +2,7 @@ package connect
 
 import (
 	"context"
+	"errors"
 
 	"connectrpc.com/connect/v2"
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/ext"
@@ -75,6 +76,18 @@ func (s *messageTracingServerStream) Send(m any) (err error) {
 	return err
 }
 
+// handlerError returns the error to record for err returned by a handler, as
+// the client receives it. connect-go sends an error the handler received from
+// another RPC (a remote *connect.Error) to the client as internal. The cause is
+// not attached, so that a remote canceled error is not taken for a canceled
+// call.
+func handlerError(err error) error {
+	if cerr, ok := errors.AsType[*connect.Error](err); ok && cerr != nil && cerr.IsRemote() {
+		return connect.NewError(connect.CodeInternal, cerr.Error())
+	}
+	return err
+}
+
 // NewServerInterceptor returns a connect.ServerInterceptor which traces the
 // RPCs served by a connect.Server. Unary calls are always traced; streaming
 // calls and their messages are traced according to WithStreamCalls and
@@ -122,7 +135,7 @@ func NewServerInterceptor(opts ...Option) connect.ServerInterceptor {
 						finishWithError(span, connect.NewError(connect.CodeInternal, "handler exited without returning"), cfg)
 						return
 					}
-					finishWithError(span, err, cfg)
+					finishWithError(span, handlerError(err), cfg)
 				}()
 				if unary && cfg.withRequestTags {
 					stream = &requestTaggingServerStream{ServerStream: stream, cfg: cfg, span: span}

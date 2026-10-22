@@ -43,13 +43,18 @@ writes no trace context of its own sends the previous call's trace headers, and
 its server span becomes a child of the previous call. This happens for:
 
 - a streaming call when the context has no active span
-- a method excluded with `WithUntracedMethods` (or `WithIgnoredMethods`)
+- a unary method excluded with `WithUntracedMethods` (or `WithIgnoredMethods`)
 
-A traced unary call, or a streaming call with an active span, overwrites them,
-except for keys the new trace context does not set (such as `baggage`).
+A traced unary call, or a streaming call with an active span, overwrites the
+trace and parent IDs, but keys the new trace context does not set stay as they
+were: `x-datadog-origin` (so an unrelated trace can be marked as coming from
+synthetics), and the `baggage` / `ot-baggage-*` of the previous trace, which
+may contain user data. With `WithMetadataTags()`, these leftover keys also show
+up as `connect.metadata.*` tags on later client spans.
+
 To avoid this, create a new context with `connect.NewClientContext` for each
-call, or delete the trace headers from `CallInfo.RequestHeader()` before such a
-call.
+call, or delete the trace headers from `CallInfo.RequestHeader()` before
+reusing it.
 
 ### Migrating from v1
 
@@ -59,9 +64,15 @@ are passed to `connect.NewServer` and `connect.NewClient` instead of
 `connect.WithInterceptors`.
 
 connect-go v2 runs server interceptors before the request is unmarshaled, so
-the `connect.request` tag of `WithRequestTags()` is set when the handler
-receives the request rather than when the span starts. The finished spans carry
-the same tags as in v1.
+the `connect.request` tag of `WithRequestTags()` is set once the handler
+successfully receives the request. A call that fails or is rejected before
+that, for example by an interceptor placed after the tracing interceptor or by
+a validation error while receiving, has no `connect.request` tag; in v1 every
+traced unary call had it.
+
+A handler that returns an error it received from another RPC sends it to the
+client as `internal` in connect-go v2, and the server span records `internal`
+too. In v1 the downstream code was sent to the client and recorded as is.
 
 ## Span tags
 

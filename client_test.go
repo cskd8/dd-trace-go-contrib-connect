@@ -272,3 +272,42 @@ func TestClientInterceptorCloseDuringReceive(t *testing.T) {
 		t.Errorf("expected the span to report the receive error, got %v", got)
 	}
 }
+
+// panickingTransport opens streams whose Receive panics.
+type panickingTransport struct{}
+
+func (panickingTransport) NewClientStream(context.Context, connect.Spec) (connect.ClientStream, error) {
+	return panickingStream{}, nil
+}
+
+type panickingStream struct{}
+
+func (panickingStream) SendHeaders() error { return nil }
+func (panickingStream) Send(any) error     { return nil }
+func (panickingStream) CloseSend() error   { return nil }
+func (panickingStream) Receive(any) error  { panic("boom") }
+func (panickingStream) Close() error       { return nil }
+
+func TestClientInterceptorReceivePanic(t *testing.T) {
+	mt := mocktracer.Start()
+	defer mt.Stop()
+
+	client := connect.NewClient(panickingTransport{}, NewClientInterceptor())
+
+	recovered := func() (r any) {
+		defer func() { r = recover() }()
+		_, _ = callUnary(context.Background(), client, "hello")
+		return nil
+	}()
+	if recovered != "boom" {
+		t.Fatalf("expected the panic to reach the caller, got %v", recovered)
+	}
+
+	spans := mt.FinishedSpans()
+	if len(spans) != 1 {
+		t.Fatalf("expected 1 finished span, got %d", len(spans))
+	}
+	if got := spans[0].Tag(tagCode); got != connect.CodeInternal.String() {
+		t.Errorf("expected connect.code internal, got %v", got)
+	}
+}
