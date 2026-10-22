@@ -19,7 +19,29 @@ updates:
     labels:
       - "dependencies"
       - "go"
-    
+
+  # Keep the v1 module (connect-go v1) on the v1 branch up to date
+  - package-ecosystem: "gomod"
+    directory: "/"
+    target-branch: "v1"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Tokyo"
+    open-pull-requests-limit: 10
+    reviewers:
+      - "cskd8"
+    assignees:
+      - "cskd8"
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "go"
+      - "v1"
+
   # Enable version updates for GitHub Actions
   - package-ecosystem: "github-actions"
     directory: "/"

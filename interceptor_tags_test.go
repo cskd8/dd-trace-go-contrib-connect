@@ -2,11 +2,11 @@ package connect
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
+	"connectrpc.com/connect/v2/connecthttp"
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/ext"
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/mocktracer"
 	"google.golang.org/protobuf/types/known/wrapperspb"
@@ -16,19 +16,15 @@ func TestServerInterceptorSpanTags(t *testing.T) {
 	mt := mocktracer.Start()
 	defer mt.Stop()
 
-	interceptor := NewServerInterceptor(WithMetadataTags(), WithRequestTags())
-	next := connect.UnaryFunc(func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
-		return connect.NewResponse(&wrapperspb.StringValue{Value: "world"}), nil
-	})
+	svc := &testService{}
+	client := newInProcessClient(svc.newServer(NewServerInterceptor(WithMetadataTags(), WithRequestTags())))
 
-	req := connect.NewRequest(&wrapperspb.StringValue{Value: "hello"})
-	req.Header().Set("X-Custom-Header", "abc")
-	req.Header().Set("X-Datadog-Trace-Id", "123")
-	req.Header().Set("X-Test-Bin", "binary")
-
-	if _, err := interceptor.WrapUnary(next)(context.Background(), req); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	ctx, info := connect.NewClientContext(context.Background())
+	info.RequestHeader().Set("X-Custom-Header", "abc")
+	info.RequestHeader().Set("X-Datadog-Trace-Id", "123")
+	info.RequestHeader().Set("X-Test-Bin", "binary")
+	_, err := callUnary(ctx, client, "hello")
+	requireNoError(t, err)
 
 	spans := mt.FinishedSpans()
 	if len(spans) != 1 {
@@ -36,11 +32,23 @@ func TestServerInterceptorSpanTags(t *testing.T) {
 	}
 	span := spans[0]
 
+	if got := span.OperationName(); got != "connect.server.request" {
+		t.Errorf("expected operation name connect.server.request, got %v", got)
+	}
+	if got := span.Tag(ext.ResourceName); got != unarySpec.Procedure {
+		t.Errorf("expected resource %q, got %v", unarySpec.Procedure, got)
+	}
 	if got := span.Tag(ext.Component); got != "connectrpc.com/connect" {
 		t.Errorf("expected component tag, got %v", got)
 	}
 	if got := span.Tag(ext.RPCSystem); got != "connect" {
 		t.Errorf("expected rpc.system connect, got %v", got)
+	}
+	if got := span.Tag(ext.RPCService); got != "test.v1.TestService" {
+		t.Errorf("expected rpc.service test.v1.TestService, got %v", got)
+	}
+	if got := span.Tag(ext.RPCMethod); got != "Unary" {
+		t.Errorf("expected rpc.method Unary, got %v", got)
 	}
 	if got := span.Tag(ext.SpanKind); got != ext.SpanKindServer {
 		t.Errorf("expected span.kind server, got %v", got)
@@ -71,20 +79,16 @@ func TestServerInterceptorSpanTagsDisabledByDefault(t *testing.T) {
 	mt := mocktracer.Start()
 	defer mt.Stop()
 
-	interceptor := NewServerInterceptor()
-	next := connect.UnaryFunc(func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
-		return connect.NewResponse(&wrapperspb.StringValue{}), nil
-	})
+	svc := &testService{}
+	client := newInProcessClient(svc.newServer(NewServerInterceptor()))
 
-	req := connect.NewRequest(&wrapperspb.StringValue{Value: "hello"})
-	req.Header().Set("X-Custom-Header", "abc")
-
-	if _, err := interceptor.WrapUnary(next)(context.Background(), req); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	ctx, info := connect.NewClientContext(context.Background())
+	info.RequestHeader().Set("X-Custom-Header", "abc")
+	_, err := callUnary(ctx, client, "hello")
+	requireNoError(t, err)
 
 	span := mt.FinishedSpans()[0]
-	if got := span.Tag(tagMetadataPrefix + "x-custom-header"); got != nil {
+	if got := span.Tag(tagMetadataPrefix + "x-custom-header.0"); got != nil {
 		t.Errorf("expected no metadata tags by default, got %v", got)
 	}
 	if got := span.Tag(tagRequest); got != nil {
@@ -96,13 +100,10 @@ func TestServerInterceptorErrorCode(t *testing.T) {
 	mt := mocktracer.Start()
 	defer mt.Stop()
 
-	interceptor := NewServerInterceptor()
-	next := connect.UnaryFunc(func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
-		return nil, connect.NewError(connect.CodeInternal, errors.New("boom"))
-	})
+	svc := &testService{err: connect.NewError(connect.CodeInternal, "boom")}
+	client := newInProcessClient(svc.newServer(NewServerInterceptor()))
 
-	req := connect.NewRequest(&wrapperspb.StringValue{})
-	if _, err := interceptor.WrapUnary(next)(context.Background(), req); err == nil {
+	if _, err := callUnary(context.Background(), client, "hello"); err == nil {
 		t.Fatal("expected error")
 	}
 
@@ -110,25 +111,22 @@ func TestServerInterceptorErrorCode(t *testing.T) {
 	if got := span.Tag(tagCode); got != connect.CodeInternal.String() {
 		t.Errorf("expected connect.code internal, got %v", got)
 	}
+	if got := span.Tag(ext.ErrorMsg); got == nil {
+		t.Error("expected the span to be marked as an error")
+	}
 }
 
 func TestClientInterceptorSpanTagsAndPropagation(t *testing.T) {
 	mt := mocktracer.Start()
 	defer mt.Stop()
 
-	interceptor := NewClientInterceptor(WithRequestTags())
-	var propagated bool
-	next := connect.UnaryFunc(func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
-		propagated = req.Header().Get("X-Datadog-Trace-Id") != ""
-		return connect.NewResponse(&wrapperspb.StringValue{}), nil
-	})
+	svc := &testService{}
+	client := newInProcessClient(svc.newServer(), NewClientInterceptor(WithRequestTags()))
 
-	req := connect.NewRequest(&wrapperspb.StringValue{Value: "hello"})
-	if _, err := interceptor.WrapUnary(next)(context.Background(), req); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	_, err := callUnary(context.Background(), client, "hello")
+	requireNoError(t, err)
 
-	if !propagated {
+	if svc.requestHeader("X-Datadog-Trace-Id") == "" {
 		t.Error("expected trace context to be injected into request headers")
 	}
 
@@ -145,8 +143,205 @@ func TestClientInterceptorSpanTagsAndPropagation(t *testing.T) {
 	if got := span.Tag(tagCode); got != codeOK {
 		t.Errorf("expected connect.code ok, got %v", got)
 	}
+	if got := span.Tag(tagMethodKind); got != methodKindUnary {
+		t.Errorf("expected connect.method.kind unary, got %v", got)
+	}
 	reqTag, _ := span.Tag(tagRequest).(string)
 	if !strings.Contains(reqTag, "hello") {
 		t.Errorf("expected connect.request tag to contain the message, got %q", reqTag)
+	}
+}
+
+func TestInterceptorsOverHTTP(t *testing.T) {
+	mt := mocktracer.Start()
+	defer mt.Stop()
+
+	svc := &testService{}
+	httpServer := newHTTPServer(svc.newServer(NewServerInterceptor(WithService("test-server"))))
+	defer httpServer.Close()
+
+	client := connect.NewClient(
+		connecthttp.NewTransport(httpServer.Client(), httpServer.URL),
+		NewClientInterceptor(WithService("test-client")),
+	)
+	_, err := callUnary(context.Background(), client, "hello")
+	requireNoError(t, err)
+
+	spans := spansByOperation(mt)
+	if len(spans["connect.server.request"]) != 1 || len(spans["connect.client.request"]) != 1 {
+		t.Fatalf("expected 1 server span and 1 client span, got %v", mt.FinishedSpans())
+	}
+	serverSpan := spans["connect.server.request"][0]
+	clientSpan := spans["connect.client.request"][0]
+
+	if serverSpan.TraceID() != clientSpan.TraceID() {
+		t.Errorf("expected the server span to continue the client trace")
+	}
+	if serverSpan.ParentID() != clientSpan.SpanID() {
+		t.Errorf("expected the server span to be a child of the client span")
+	}
+	for _, span := range []*mocktracer.Span{serverSpan, clientSpan} {
+		if got := span.Tag(tagProtocol); got != connect.ProtocolNameConnect {
+			t.Errorf("expected connect.protocol %q on %s, got %v", connect.ProtocolNameConnect, span.OperationName(), got)
+		}
+		if got, _ := span.Tag(tagPeerAddr).(string); got == "" {
+			t.Errorf("expected connect.peer.addr on %s", span.OperationName())
+		}
+	}
+	if got := serverSpan.Tag(ext.ServiceName); got != "test-server" {
+		t.Errorf("expected server service test-server, got %v", got)
+	}
+	if got := clientSpan.Tag(ext.ServiceName); got != "test-client" {
+		t.Errorf("expected client service test-client, got %v", got)
+	}
+}
+
+func TestServerInterceptorIgnoredMetadataCase(t *testing.T) {
+	mt := mocktracer.Start()
+	defer mt.Stop()
+
+	svc := &testService{}
+	client := newInProcessClient(svc.newServer(NewServerInterceptor(WithMetadataTags(), WithIgnoredMetadata("X-Secret"))))
+
+	ctx, info := connect.NewClientContext(context.Background())
+	info.RequestHeader().Set("X-Secret", "s")
+	_, err := callUnary(ctx, client, "hello")
+	requireNoError(t, err)
+
+	if got := mt.FinishedSpans()[0].Tag(tagMetadataPrefix + "x-secret.0"); got != nil {
+		t.Errorf("expected X-Secret to be ignored, got %v", got)
+	}
+}
+
+func TestServerInterceptorClientStreamRequestTags(t *testing.T) {
+	mt := mocktracer.Start()
+	defer mt.Stop()
+
+	svc := &testService{}
+	client := newInProcessClient(svc.newServer(NewServerInterceptor(WithRequestTags())))
+
+	n, err := callClientStream(context.Background(), client, "a", "b")
+	requireNoError(t, err)
+	if n != 2 {
+		t.Fatalf("expected the server to receive 2 messages, got %d", n)
+	}
+
+	messages := spansByOperation(mt)["connect.message"]
+	var tagged int
+	for _, span := range messages {
+		if span.Tag(tagRequest) != nil {
+			tagged++
+		}
+	}
+	// the handler receives 2 messages and then the end of the stream, and
+	// sends 1 response; only the received messages are tagged
+	if len(messages) != 4 {
+		t.Fatalf("expected 4 message spans, got %d", len(messages))
+	}
+	if tagged != 2 {
+		t.Errorf("expected 2 message spans with the request tag, got %d", tagged)
+	}
+}
+
+func TestInterceptorsNotModified(t *testing.T) {
+	mt := mocktracer.Start()
+	defer mt.Stop()
+
+	// a Connect GET request whose handler answers 304 Not Modified
+	getSpec := connect.Spec{
+		Procedure:        "/test.v1.TestService/Get",
+		StreamType:       connect.StreamTypeUnary,
+		IdempotencyLevel: connect.IdempotencyNoSideEffects,
+	}
+	server := connect.NewServer(NewServerInterceptor())
+	server.Register(connect.Method{
+		Spec: getSpec,
+		Handler: func(_ context.Context, _ connect.Spec, stream connect.ServerStream) error {
+			var req wrapperspb.StringValue
+			if err := stream.Receive(&req); err != nil {
+				return err
+			}
+			return connecthttp.NewNotModifiedError()
+		},
+	})
+	httpServer := newHTTPServer(server)
+	defer httpServer.Close()
+	client := connect.NewClient(
+		connecthttp.NewTransport(httpServer.Client(), httpServer.URL, connecthttp.WithHTTPGet()),
+		NewClientInterceptor(),
+	)
+
+	err := client.CallUnary(context.Background(), getSpec, wrapperspb.String("hello"), &wrapperspb.StringValue{})
+	if !connecthttp.IsNotModifiedError(err) {
+		t.Fatalf("expected a not-modified error, got %v", err)
+	}
+
+	spans := mt.FinishedSpans()
+	if len(spans) != 2 {
+		t.Fatalf("expected a server span and a client span, got %d", len(spans))
+	}
+	for _, span := range spans {
+		if got := span.Tag(tagCode); got != codeOK {
+			t.Errorf("expected connect.code ok on %s, got %v", span.OperationName(), got)
+		}
+		if got := span.Tag(ext.ErrorMsg); got != nil {
+			t.Errorf("expected %s not to be an error, got %v", span.OperationName(), got)
+		}
+	}
+}
+
+func TestInterceptorsForwardedNotModified(t *testing.T) {
+	mt := mocktracer.Start()
+	defer mt.Stop()
+
+	getSpec := connect.Spec{
+		Procedure:        "/test.v1.TestService/Get",
+		StreamType:       connect.StreamTypeUnary,
+		IdempotencyLevel: connect.IdempotencyNoSideEffects,
+	}
+	// the gateway forwards the not-modified error of an in-process downstream,
+	// which reaches it as a remote error
+	downstream := connect.NewServer()
+	downstream.Register(connect.Method{
+		Spec: getSpec,
+		Handler: func(context.Context, connect.Spec, connect.ServerStream) error {
+			return connecthttp.NewNotModifiedError()
+		},
+	})
+	downstreamClient := newInProcessClient(downstream)
+	gateway := connect.NewServer(NewServerInterceptor())
+	gateway.Register(connect.Method{
+		Spec: getSpec,
+		Handler: func(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+			var req wrapperspb.StringValue
+			if err := stream.Receive(&req); err != nil {
+				return err
+			}
+			return downstreamClient.CallUnary(ctx, getSpec, &req, &wrapperspb.StringValue{})
+		},
+	})
+	httpServer := newHTTPServer(gateway)
+	defer httpServer.Close()
+	client := connect.NewClient(
+		connecthttp.NewTransport(httpServer.Client(), httpServer.URL, connecthttp.WithHTTPGet()),
+		NewClientInterceptor(),
+	)
+
+	err := client.CallUnary(context.Background(), getSpec, wrapperspb.String("hello"), &wrapperspb.StringValue{})
+	if !connecthttp.IsNotModifiedError(err) {
+		t.Fatalf("expected the client to receive a not-modified error, got %v", err)
+	}
+
+	spans := spansByOperation(mt)
+	if len(spans["connect.server.request"]) != 1 || len(spans["connect.client.request"]) != 1 {
+		t.Fatalf("expected 1 server span and 1 client span, got %v", mt.FinishedSpans())
+	}
+	for _, span := range mt.FinishedSpans() {
+		if got := span.Tag(tagCode); got != codeOK {
+			t.Errorf("expected connect.code ok on %s, got %v", span.OperationName(), got)
+		}
+		if got := span.Tag(ext.ErrorMsg); got != nil {
+			t.Errorf("expected %s not to be an error, got %v", span.OperationName(), got)
+		}
 	}
 }

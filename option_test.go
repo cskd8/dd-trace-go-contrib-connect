@@ -3,7 +3,7 @@ package connect
 import (
 	"testing"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/tracer"
 )
 
@@ -245,23 +245,6 @@ func TestWithAnalyticsRate(t *testing.T) {
 	}
 }
 
-func TestWithIgnoredMethods(t *testing.T) {
-	methods := []string{"/test.Service/Method1", "/test.Service/Method2"}
-	cfg := &config{}
-	option := WithIgnoredMethods(methods...)
-	option(cfg)
-
-	if len(cfg.ignoredMethods) != len(methods) {
-		t.Errorf("expected %d ignored methods, got %d", len(methods), len(cfg.ignoredMethods))
-	}
-
-	for _, method := range methods {
-		if _, exists := cfg.ignoredMethods[method]; !exists {
-			t.Errorf("expected %s to be in ignoredMethods", method)
-		}
-	}
-}
-
 func TestWithUntracedMethods(t *testing.T) {
 	methods := []string{"/test.Service/Method1", "/test.Service/Method2"}
 	cfg := &config{}
@@ -302,6 +285,17 @@ func TestWithIgnoredMetadata(t *testing.T) {
 		if _, exists := cfg.ignoredMetadata[key]; !exists {
 			t.Errorf("expected %s to be in ignoredMetadata", key)
 		}
+	}
+}
+
+func TestWithIgnoredMetadataCaseInsensitive(t *testing.T) {
+	cfg := &config{}
+	serverDefaults(cfg)
+	WithIgnoredMetadata("X-Secret")(cfg)
+
+	// withMetadataTags looks up the lowercased header key
+	if _, exists := cfg.ignoredMetadata["x-secret"]; !exists {
+		t.Errorf("expected X-Secret to be ignored as x-secret, got %v", cfg.ignoredMetadata)
 	}
 }
 
