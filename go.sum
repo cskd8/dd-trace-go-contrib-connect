@@ -1,5 +1,5 @@
-connectrpc.com/connect/v2 v2.0.1 h1:WTAycxe87UqxSM5oxS30d1dalZ+C5xz8Ec8O6zVYkHQ=
-connectrpc.com/connect/v2 v2.0.1/go.mod h1:N32OLrstcPUzkykFynnefFro3+xzSdOrZlK2jHmS/xo=
+connectrpc.com/connect/v2 v2.0.2 h1:PoPDmOlhc46elsuCdKCKTxjNBb3HJlKF+s/sP2oucPw=
+connectrpc.com/connect/v2 v2.0.2/go.mod h1:N32OLrstcPUzkykFynnefFro3+xzSdOrZlK2jHmS/xo=
 github.com/DataDog/datadog-agent/comp/core/tagger/origindetection v0.82.0 h1:4cTEzpBezsfbHkn90BDPSYAWCahLqe/cpR5DSvRPrLU=
 github.com/DataDog/datadog-agent/comp/core/tagger/origindetection v0.82.0/go.mod h1:6LC1ryDn2VNqF0iNapwcLLdsfoFUMnT4p+JPu6sEkHg=
 github.com/DataDog/datadog-agent/pkg/obfuscate v0.82.0 h1:d0qTccmgcy/cCFlX7uz6m++2qtdHjG0cfj+Tj/w+TEo=
